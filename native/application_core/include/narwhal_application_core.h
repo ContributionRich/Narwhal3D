@@ -60,6 +60,18 @@ ptrdiff_t narwhal_load_jobs_json(const uint8_t *input, size_t length,
 uint32_t narwhal_save_jobs_abi(void);
 ptrdiff_t narwhal_save_jobs_json(const uint8_t *input, size_t length,
                                 uint8_t *output, size_t capacity);
+/* Additive runtime SHA256 ABI1: no geometry or admission policy.
+ * descriptor: caller-owned live POSIX fd / Windows HANDLE (not Windows CRT fd).
+ * Hashes the entire regular file, expected_size <=16 GiB, fixed64KiB buffering.
+ * Caller must retain the descriptor and provide exactly32 exclusive output bytes.
+ * Never closes caller descriptor, retains pointers, opens a path or searches PATH.
+ *0 success;1 descriptor;2 nonregular;3 size limit;4 IO/change;5 panic;6 output.
+ * Output is untouched on failure. Host pre/post file identity/ChangeTime guards
+ * are still required. Existing session/history/registry ABI versions stay1.
+ */
+uint32_t narwhal_runtime_hash_abi(void);
+int32_t narwhal_runtime_hash_file_v1(uintptr_t descriptor, uint64_t expected_size,
+                                    uint8_t *output, size_t capacity);
 #ifdef __cplusplus
 }
 #endif

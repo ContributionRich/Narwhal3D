@@ -72,6 +72,7 @@ APPLICATION_CORE_EXPORTS = (
     "narwhal_session_abi", "narwhal_session_json",
     "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
     "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
+    "narwhal_runtime_hash_abi", "narwhal_runtime_hash_file_v1",
 )
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
@@ -603,6 +604,8 @@ def validate_native_components(
     for job_kind in ("load", "save"):
         probe_native_library_abi(directory / "libnarwhal_application_core.so",
                                  f"narwhal_{job_kind}_jobs_abi", 1, occt_library_dir)
+    application["runtime_hash_abi"] = probe_native_library_abi(
+        directory / "libnarwhal_application_core.so", "narwhal_runtime_hash_abi", 1, occt_library_dir)
     application["exports"] = list(APPLICATION_CORE_EXPORTS)
     try:
         records["libnarwhal_pure_core.so"].update(probe_pure_core_parser(

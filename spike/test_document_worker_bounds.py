@@ -15,7 +15,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 import time
 
@@ -76,12 +76,19 @@ class WorkerBoundsTests(unittest.TestCase):
             image.write_bytes(b'qualified fixture, never executed')
             digest=hashlib.sha256(image.read_bytes()).hexdigest()
             original=list(worker._runtime_images)
+            import ctypes
+            real_load = ctypes.CDLL
+            load = Mock(return_value=object())
+            def scoped_load(path, *args, **kwargs):
+                # Only the unexecutable fixture is mocked; runtime hashing uses the real core.
+                return load(path, *args, **kwargs) if Path(path) == image else real_load(path, *args, **kwargs)
             try:
-                with patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps([[str(image),digest]])}), patch('ctypes.CDLL',return_value=object()) as load:
+                with patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps([[str(image),digest]])}), patch('ctypes.CDLL',side_effect=scoped_load):
                     worker._match_parent_runtime_images()
                     load.assert_called_once_with(str(image))
                 for value in ([[str(image),'0'*64]],[[str(image.with_name('unrelated.so')),digest]],{},[[str(image),digest]]*17):
-                    with self.subTest(value=str(value)[:80]), patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps(value)}), patch('ctypes.CDLL') as load:
+                    load.reset_mock()
+                    with self.subTest(value=str(value)[:80]), patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps(value)}), patch('ctypes.CDLL',side_effect=scoped_load):
                         with self.assertRaises(SystemExit):worker._match_parent_runtime_images()
                         load.assert_not_called()
             finally:worker._runtime_images[:]=original

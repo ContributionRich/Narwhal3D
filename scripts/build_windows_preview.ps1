@@ -1204,9 +1204,21 @@ for job_kind in ("load", "save"):
     if abi() != 1:
         raise SystemExit(f"application-core {job_kind} jobs ABI mismatch")
     getattr(application, f"narwhal_{job_kind}_jobs_json")
+application.narwhal_runtime_hash_abi.argtypes = []
+application.narwhal_runtime_hash_abi.restype = ctypes.c_uint32
+if application.narwhal_runtime_hash_abi() != 1:
+    raise SystemExit("application-core runtime hash ABI mismatch")
+getattr(application, "narwhal_runtime_hash_file_v1")
 if (native / "narwhal_application_core.dll").read_bytes() != (app / "runtime/windows-x86_64/bin/narwhal_application_core.dll").read_bytes():
     raise SystemExit("application-core runtime/adjacent copies differ")
 platform = ctypes.WinDLL(str(native / "narwhal_platform_core.dll"))
+import tempfile
+from narwhal3d.native_document_session import runtime_file_sha256
+with tempfile.TemporaryFile() as probe:
+    probe.write(b"abc")
+    probe.flush()
+    if runtime_file_sha256(probe, 3) != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad":
+        raise SystemExit("application-core runtime SHA256 mismatch")
 platform.narwhal_platform_core_abi_version.restype = ctypes.c_uint32
 if platform.narwhal_platform_core_abi_version() != 1:
     raise SystemExit("platform-core ABI mismatch")

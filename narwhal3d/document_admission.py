@@ -89,17 +89,15 @@ def _binary_identity(path):
     if cached is not None:
         _binary_hashes.move_to_end(cache_key)
         return (str(path), cached)
-    digest = hashlib.sha256()
+    from .native_document_session import runtime_file_sha256
     with path.open("rb") as stream:
         if _stamp(os.fstat(stream.fileno())) != _stamp(before):
             raise RuntimeError("runtime binary changed before hashing: " + str(path))
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
+        result = runtime_file_sha256(stream, before.st_size)
         if (_stamp(os.fstat(stream.fileno())) != _stamp(before)
                 or _stamp(path.stat()) != _stamp(before)
                 or _change_time(path) != change_time):
             raise RuntimeError("runtime binary changed while hashing: " + str(path))
-    result = digest.hexdigest()
     _binary_hashes[cache_key] = result
     while len(_binary_hashes) > MAX_BINARY_HASHES:
         _binary_hashes.popitem(last=False)

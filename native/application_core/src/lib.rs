@@ -4,6 +4,8 @@ mod load_jobs;
 mod object_registry;
 pub mod observation;
 mod ordinal_map;
+mod runtime_hash;
+pub use runtime_hash::{narwhal_runtime_hash_abi, narwhal_runtime_hash_file_v1};
 mod save_jobs;
 mod session;
 mod table;

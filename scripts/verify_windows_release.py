@@ -32,6 +32,7 @@ APPLICATION_CORE_EXPORTS = (
     "narwhal_session_abi", "narwhal_session_json",
     "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
     "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
+    "narwhal_runtime_hash_abi", "narwhal_runtime_hash_file_v1",
 )
 APPLICATION_CORE_REGISTRY_ABI = 1
 APPLICATION_CORE_OBSERVATION_ABI = 1
@@ -462,6 +463,7 @@ def verify_application_core_identity(path: Path) -> dict[str, object]:
         "narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,
         "narwhal_load_jobs_abi": 1,
         "narwhal_save_jobs_abi": 1,
+        "narwhal_runtime_hash_abi": 1,
         "narwhal_object_registry_abi": APPLICATION_CORE_REGISTRY_ABI,
         "narwhal_object_observation_abi": APPLICATION_CORE_OBSERVATION_ABI,
     })

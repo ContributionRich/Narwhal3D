@@ -49,7 +49,7 @@ class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.source = self.root / "narwhal3d" / "native_geometry.py"
         self.source.parent.mkdir()
         self.source.write_bytes(b"resolver source")
@@ -145,7 +145,7 @@ class RuntimeTests(unittest.TestCase):
         after = self.identity()
         self.assertNotEqual(before, after)
         self.assertEqual(geometry._binding_cache.path, override)
-        self.assertIn(str(override.resolve()), repr(after))
+        self.assertEqual(after[-2][0], str(override.resolve()))
         self.rewrite(override)
         self.assertNotEqual(after, self.identity())
 
@@ -178,13 +178,15 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(before, self.identity())
 
     def test_atomic_same_size_same_mtime_replacement(self):
-        before = admission._binary_identity(self.decoder)
-        stamp = self.decoder.stat()
-        replacement = self.root / "replacement"
-        replacement.write_bytes(b"Y" * stamp.st_size)
-        os.utime(replacement, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
-        replacement.replace(self.decoder)
-        self.assertNotEqual(before, admission._binary_identity(self.decoder))
+        # Inode replacement must independently invalidate, even if ChangeTime matches.
+        with patch.object(admission, "_change_time", return_value=10):
+            before = admission._binary_identity(self.decoder)
+            stamp = self.decoder.stat()
+            replacement = self.root / "replacement"
+            replacement.write_bytes(b"Y" * stamp.st_size)
+            os.utime(replacement, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            replacement.replace(self.decoder)
+            self.assertNotEqual(before, admission._binary_identity(self.decoder))
 
     def test_stat_guards_not_cross_process_identity(self):
         before = admission._binary_identity(self.decoder)
@@ -216,7 +218,7 @@ class RuntimeTests(unittest.TestCase):
             calls.append(None)
             if len(calls) == 2:
                 return types.SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino,
-                    st_size=value.st_size, st_mtime_ns=value.st_mtime_ns,
+                    st_size=value.st_size, st_mtime_ns=value.st_mtime_ns + 1,
                     st_ctime_ns=value.st_ctime_ns + 1)
             return value
         with patch.object(admission.os, "fstat", side_effect=changing):
@@ -238,27 +240,48 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(len(admission._binary_hashes), 2)
 
     def test_linux_inventory_uses_loaded_paths_and_refuses_stale_images(self):
-        # Exercise the real inventory, not the set stub used by the other tests.
+        # Linux maps syntax is synthetic even on a Windows host; the inode is real.
         inventory = self.inventory
         value = self.kernel.stat()
-        device = format(os.major(value.st_dev), "x") + ":" + format(os.minor(value.st_dev), "x")
-        line = "1000-2000 r-xp 0000 " + device + " " + str(value.st_ino) + " " + str(self.kernel) + "\n"
-        with patch.object(admission.sys, "platform", "linux"), patch(
-                "builtins.open", mock_open(read_data=line)):
-            self.assertEqual(inventory(), {str(self.kernel)})
-        with patch.object(admission.sys, "platform", "linux"), patch(
-                "builtins.open", mock_open(read_data=line.replace(device, "ffff:ffff"))):
-            self.assertEqual(inventory(), {str(self.kernel)})
-        for path in (self.kernel, self.decoder, self.ocp, self.core):
-            deleted = "1000-2000 r-xp 0000 " + device + " " + str(value.st_ino) + " " + str(path) + " (deleted)\n"
-            with patch.object(admission.sys, "platform", "linux"), patch(
-                    "builtins.open", mock_open(read_data=deleted)):
+        device = "01:02"
+        image = "/runtime-fixture/libTKBRep.so"
+        line = "1000-2000 r-xp 0000 " + device + " " + str(value.st_ino) + " " + image + "\n"
+        with patch.object(admission.sys, "platform", "linux"), patch.object(
+                admission.os, "stat", return_value=value), patch.object(admission.os, "makedev",
+                side_effect=lambda major, minor: value.st_dev if (major, minor) == (1, 2) else value.st_dev + 1,
+                create=True):
+            with patch("builtins.open", mock_open(read_data=line)):
+                self.assertEqual(inventory(), {image})
+            with patch("builtins.open", mock_open(read_data=line.replace(device, "ffff:ffff"))):
+                self.assertEqual(inventory(), {image})
+            for name in ("libTKBRep.so", "_rhino3dm.so", "OCP.so", "libnarwhal_geometry_core.so"):
+                deleted = "1000-2000 r-xp 0000 " + device + " " + str(value.st_ino) + " /runtime-fixture/" + name + " (deleted)\n"
+                with patch("builtins.open", mock_open(read_data=deleted)):
+                    with self.assertRaises(RuntimeError):
+                        inventory()
+            with patch("builtins.open", mock_open(read_data=line.replace(str(value.st_ino), "0"))):
                 with self.assertRaises(RuntimeError):
                     inventory()
-        with patch.object(admission.sys, "platform", "linux"), patch(
-                "builtins.open", mock_open(read_data=line.replace(str(value.st_ino), "0"))):
-            with self.assertRaises(RuntimeError):
-                inventory()
+
+    def test_native_sha256_exact_and_symlink_alias(self):
+        import hashlib
+        expected = hashlib.sha256(self.decoder.read_bytes()).hexdigest()
+        self.assertEqual(admission._binary_identity(self.decoder), (str(self.decoder.resolve()), expected))
+        alias = self.root / "runtime-alias"
+        try:
+            alias.symlink_to(self.decoder)
+        except OSError as error:
+            self.skipTest("host symlink privilege unavailable: " + str(error))
+        self.assertEqual(admission._binary_identity(alias), admission._binary_identity(self.decoder))
+        self.rewrite(self.decoder)
+        self.assertNotEqual(admission._binary_identity(alias)[1], expected)
+
+    def test_native_hash_capability_required_without_python_fallback(self):
+        from narwhal3d import native_document_session as session
+        with self.decoder.open("rb") as stream:
+            with patch.object(session, "load_library", return_value=types.SimpleNamespace()):
+                with self.assertRaisesRegex(session.SessionUnavailable, "SHA256 exports unavailable"):
+                    session.runtime_file_sha256(stream, self.decoder.stat().st_size)
 
     def test_contract_includes_runtime(self):
         native = types.SimpleNamespace(executable=lambda feature: None)
@@ -275,7 +298,7 @@ def run_tests(stream=None):
 
 def mutations():
     cases = [
-        ("omit ctime/inode", "_stamp", "value.st_dev, value.st_ino, value.st_size,\n            value.st_mtime_ns, value.st_ctime_ns", "value.st_size, value.st_mtime_ns"),
+        ("omit ctime/inode", "_stamp", "value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, ctime", "value.st_size, value.st_mtime_ns"),
         ("omit Windows change time", "_binary_identity", "_stamp(before), change_time)", "_stamp(before), None)"),
         ("omit decoder bytes", "runtime_identity", "_loaded_identity(decoder.__file__)", "None"),
         ("omit OCP bytes", "runtime_identity", "_loaded_identity(binding_path)", "None"),

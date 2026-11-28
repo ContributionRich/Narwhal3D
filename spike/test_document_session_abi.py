@@ -514,8 +514,8 @@ def mutation_checks():
     source = MODULE.read_text()
     mutations = [
         ('missing defaults silently accepted',
-         '    raise SessionUnavailable("application-core library not installed")\n\n\ndef _uint',
-         '    return None\n\n\ndef _uint',
+         '    raise SessionUnavailable("application-core library not installed")\n\n\ndef runtime_file_sha256',
+         '    return None\n\n\ndef runtime_file_sha256',
          DiscoveryTests, 'test_default_discovery_order_and_missing'),
         ("explicit path authority", "if explicit is not None:\n        if not explicit:",
          "if explicit:\n        if not explicit:",

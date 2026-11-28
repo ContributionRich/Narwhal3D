@@ -95,6 +95,8 @@
       "native/application_core/src/history.rs",
       "native/application_core/src/history_tests.rs",
       "native/application_core/src/lib.rs",
+      "native/application_core/src/runtime_hash.rs",
+      "native/application_core/tests/runtime_hash_protocol.rs",
       "native/application_core/src/ordinal_map.rs",
       "native/application_core/src/session.rs",
       "native/application_core/src/table.rs",

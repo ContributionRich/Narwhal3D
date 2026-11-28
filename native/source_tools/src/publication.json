@@ -958,6 +958,8 @@
       "native/application_core/OPENNURBS_LICENSE",
       "native/application_core/include/narwhal_application_core.h",
       "native/application_core/src/lib.rs",
+      "native/application_core/src/runtime_hash.rs",
+      "native/application_core/tests/runtime_hash_protocol.rs",
       "native/application_core/src/session.rs",
       "native/application_core/src/load_jobs.rs",
       "native/application_core/src/save_jobs.rs",

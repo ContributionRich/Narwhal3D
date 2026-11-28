@@ -43,14 +43,15 @@ LICENSE = "application_core-OPENNURBS.txt"
 EXPORTS = ("narwhal_history_abi", "narwhal_history_json",
            "narwhal_session_abi", "narwhal_session_json")
 JOB_EXPORTS = ("narwhal_load_jobs_abi", "narwhal_load_jobs_json",
-               "narwhal_save_jobs_abi", "narwhal_save_jobs_json")
+               "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
+               "narwhal_runtime_hash_abi", "narwhal_runtime_hash_file_v1")
 REGISTRY_EXPORTS = ("narwhal_object_observation_abi", "narwhal_object_registry_abi",
                     "narwhal_object_registry_json", "narwhal_object_registry_observe")
 # Historical Windows exports plus required additive load/save job exports; synthetic PE qualification only.
 WINDOWS_EXPORTS = tuple(sorted(EXPORTS + REGISTRY_EXPORTS + JOB_EXPORTS))
 
 
-def fake_library(abi=1, history_abi=1, missing=()):
+def fake_library(abi=1, history_abi=1, missing=(), runtime_hash_abi=1):
     library = types.SimpleNamespace(narwhal_session_abi=lambda: abi,
                                     narwhal_session_json=lambda: None,
                                     narwhal_history_abi=lambda: history_abi,
@@ -58,6 +59,8 @@ def fake_library(abi=1, history_abi=1, missing=()):
     for kind in ("load","save"):
         setattr(library,f"narwhal_{kind}_jobs_abi",lambda:1)
         setattr(library,f"narwhal_{kind}_jobs_json",lambda:None)
+    library.narwhal_runtime_hash_abi = lambda: runtime_hash_abi
+    library.narwhal_runtime_hash_file_v1 = lambda: None
     for symbol in missing:
         delattr(library, symbol)
     return library
@@ -237,7 +240,7 @@ class ApplicationPackaging(unittest.TestCase):
     def test_linux_history_probe_and_packaged_loader(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for options in ({}, {"abi": 2}, {"history_abi": 2},
+            for options in ({}, {"abi": 2}, {"history_abi": 2}, {"runtime_hash_abi": 2},
                             {"missing": ("narwhal_history_abi", "narwhal_history_json")},
                             *({"missing": (symbol,)} for symbol in EXPORTS + JOB_EXPORTS)):
                 library = fake_library(**options)
@@ -279,11 +282,11 @@ class ApplicationPackaging(unittest.TestCase):
                     else:
                         exec(code, namespace)
                         self.assertEqual(namespace["records"][SO],
-                                         {"abi": 1, "history_abi": 1, "exports": list(EXPORTS + JOB_EXPORTS)})
+                                         {"abi": 1, "history_abi": 1, "runtime_hash_abi": 1, "exports": list(EXPORTS + JOB_EXPORTS)})
                         loaded.reset_mock()
                         linux_verify.verify_native_library_abis(root, Path("python"), {})
                         paths = [call.args[0] for call in loaded.call_args_list if Path(call.args[0]).name == SO]
-                        self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 4)
+                        self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 5)
                         self.assertEqual(library.narwhal_history_abi.argtypes, [])
                         self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
                         join.assert_called_once_with(root / "narwhal3d/native/libnarwhal_geometry_core.so",
@@ -306,7 +309,7 @@ class ApplicationPackaging(unittest.TestCase):
 
     def test_linux_packaged_history_receipt_must_match_executed_probe(self):
         expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
-        expected.update(application_core_load_jobs=1,application_core_save_jobs=1)
+        expected.update(application_core_load_jobs=1,application_core_save_jobs=1,application_core_runtime_hash=1)
         for history in (None, 2, 1):
             result = dict(expected)
             if history is not None:
@@ -678,7 +681,7 @@ class ApplicationPackaging(unittest.TestCase):
             runtime.mkdir(parents=True)
             (native / DLL).write_bytes(b"fixture")
             (runtime / DLL).write_bytes(b"fixture")
-            for options in ({}, {"abi": 2}, {"history_abi": 2},
+            for options in ({}, {"abi": 2}, {"history_abi": 2}, {"runtime_hash_abi": 2},
                             {"missing": ("narwhal_history_abi", "narwhal_history_json")},
                             *({"missing": (symbol,)} for symbol in EXPORTS + JOB_EXPORTS)):
                 library = fake_library(**options)

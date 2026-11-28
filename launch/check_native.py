@@ -303,6 +303,14 @@ def check():
     package = types.ModuleType('narwhal3d')
     package.__path__ = [str(ROOT / 'narwhal3d')]
     sys.modules['narwhal3d'] = package
+    # Host file-handle integration; Rust's producer must pass a standard vector.
+    import tempfile
+    from narwhal3d.native_document_session import runtime_file_sha256
+    with tempfile.TemporaryFile() as probe:
+        probe.write(b'abc')
+        probe.flush()
+        if runtime_file_sha256(probe, 3) != 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad':
+            raise RuntimeError('required native runtime SHA256 returned an invalid startup digest')
     from narwhal3d import native_ui_content
     if native_ui_content.read(4, rows={"t": "tuple", "v": []}) != ():
         raise RuntimeError('required native UI content projection differs')

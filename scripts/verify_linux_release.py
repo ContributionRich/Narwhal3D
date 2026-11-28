@@ -62,6 +62,7 @@ APPLICATION_CORE_EXPORTS = (
     "narwhal_session_abi", "narwhal_session_json",
     "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
     "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
+    "narwhal_runtime_hash_abi", "narwhal_runtime_hash_file_v1",
 )
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
@@ -649,6 +650,9 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
         abi_specs.append((f"application_core_{job_kind}_jobs",
                           str(app_root / "narwhal3d/native/libnarwhal_application_core.so"),
                           f"narwhal_{job_kind}_jobs_abi", APPLICATION_CORE_EXPORTS))
+    abi_specs.append(("application_core_runtime_hash",
+                      str(app_root / "narwhal3d/native/libnarwhal_application_core.so"),
+                      "narwhal_runtime_hash_abi", APPLICATION_CORE_EXPORTS))
     try:
         completed = subprocess.run(
             [str(python), "-I", "-c", abi_probe, json.dumps(abi_specs)],
@@ -660,7 +664,8 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
         raise VerificationError(f"cannot load packaged native accelerators: {detail or exc}") from exc
     expected_abis = {name: expected for name, (_symbol, expected) in NATIVE_LIBRARY_ABIS.items()}
     expected_abis["application_core_history"] = APPLICATION_CORE_HISTORY_ABI
-    expected_abis.update(application_core_load_jobs=1,application_core_save_jobs=1)
+    expected_abis.update(application_core_load_jobs=1,application_core_save_jobs=1,
+                         application_core_runtime_hash=1)
     if actual_abis != expected_abis:
         raise VerificationError(
             f"packaged native accelerator ABIs: expected {expected_abis}, got {actual_abis}")

@@ -109,6 +109,34 @@ def load_library():
     raise SessionUnavailable("application-core library not installed")
 
 
+def runtime_file_sha256(stream, expected_size):
+    """SDK/OS-handle marshalling only; Rust streams SHA256, no Python hash fallback.
+
+    The caller retains its open stream and all pre/post file identity checks.
+    A fresh selected application core must provide the additive hash ABI1.
+    """
+    library = load_library()
+    try:
+        abi = library.narwhal_runtime_hash_abi
+        abi.argtypes, abi.restype = [], ctypes.c_uint32
+        function = library.narwhal_runtime_hash_file_v1
+        function.argtypes = [ctypes.c_size_t, ctypes.c_uint64, _ByteP, ctypes.c_size_t]
+        function.restype = ctypes.c_int32
+    except AttributeError as error:
+        raise SessionUnavailable('native runtime SHA256 exports unavailable; rebuild application-core') from error
+    if abi() != 1:
+        raise SessionUnavailable('native runtime SHA256 ABI must be 1')
+    descriptor = stream.fileno()
+    if sys.platform == 'win32':
+        import msvcrt
+        descriptor = msvcrt.get_osfhandle(descriptor)
+    output = (ctypes.c_ubyte * 32)()
+    status = function(descriptor, expected_size, output, len(output))
+    if status != 0:
+        raise RuntimeError(f'native runtime SHA256 refused file (status {status})')
+    return bytes(output).hex()
+
+
 def _uint(value):
     return type(value) is int and 0 <= value <= (1 << 64) - 1
 
