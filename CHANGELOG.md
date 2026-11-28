@@ -4,6 +4,21 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.15 — release preparation
+
+Changes since the published 0.4.14 packages:
+
+- **Standard Exit behavior:** an unchanged document closes directly; unsaved work offers Yes/No/Cancel. No intentionally discards without staging a save or recovery copy. Yes uses normal validated Save and closes only on success; cancellation or failed Save leaves the document open. Title-bar close and update approval use the same guarded flow. Saving and host teardown can still take time.
+- **Faster everyday interaction:** ordinary object picking uses viewport display geometry rather than rebuilding exact solids; explicit subobject operations retain exact topology. Properties reuse unchanged exact-source information without duplicate inspection. History witnesses avoid redundant checksum work while preserving byte-identical observations and one Undo history. Cold geometry inspection can still pause.
+- **Boolean Difference now publishes multiple exact results atomically**, preserving every independent airtight component, attributes, recipes, Undo/Redo and save/reload instead of refusing a valid multi-solid result.
+- **Import native projects:** Import accepts `.narwhal` and merges supported objects, units and document resources into the current model. Unsupported resources are explicitly refused before mutation rather than silently dropped.
+- **Curve-editing fixes:** exact Near snapping follows the cursor on detailed curves; copied/exploded curves refine their display by chord tolerance and mesh identity. Deleting a curved PolyCurve joint now uses measured reference behavior and exact SDK/Rust operations. Curved joints must currently be deleted one at a time.
+- **Linux Picture can place PDFs:** page 1 is rasterized into a persistent reference image with correct visible-page aspect and physical size; multi-page omissions are reported. The AppImage bundles its renderer. This is not PDF vector import. Windows PDF placement remains unsupported. Picture image assets remain external user-data files and should be backed up with documents.
+- **More Rust-backed computation:** SDK-qualified PolyCurve sampling, curve/surface offsets, display grids, DXF curve approximation, closed planar area/centroid measurement, mixed curve intersections and coil/cage regrouping. Numerical acceleration is platform- and SDK-qualified; compatibility paths remain where unqualified. Display tessellation does not replace authoritative analytic geometry.
+- **Substantial Python-tooling retirement:** Rust replaces public-source export/audit engines and most native qualification orchestration. The last published conversion checkpoint removed 355,711 Python bytes net, including new PR coverage; actual SDK/host tests remain. Publication now refuses transient private editor/build artifacts rather than accidentally including them.
+
+The Linux AppImage and Windows portable EXE are being qualified from one pinned source revision. This preparation entry does not claim that release assets are already published. No macOS build is planned for this release. The Windows EXE is unsigned; Windows graphics acceptance uses a software-OpenGL VM, not a physical GPU. Supported AI workflows remain bounded; this release does not claim new unrestricted AI control or accepted whale/taco design quality.
+
 ## 0.4.14 — 2026-11-23
 
 Linux x86-64 AppImage and Windows x86-64 portable EXE, both published from tagged source `58b24e8d4e82380bcb34eca596133c9d6e7b0579`. Download packages and SHA-256 checksums from the [0.4.14 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.14). No macOS build is provided.

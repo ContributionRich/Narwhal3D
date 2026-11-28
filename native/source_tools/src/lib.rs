@@ -1,5 +1,6 @@
 mod audit_cases;
 pub mod checks;
+pub mod pdf_bundle;
 pub mod policy;
 pub mod pure_abi;
 pub mod pure_gate;
@@ -1434,6 +1435,7 @@ pub fn dispatch(request: &Value) -> Result<Value, String> {
             &root,
             request["name"].as_str().ok_or("probe name missing")?
         )?),
+        "pdf_bundle" => pdf_bundle::dispatch(request)?,
         "pure_gate_metadata" => wire(&pure_gate::metadata()),
         "pure_gate" => pure_gate::dispatch(request, &c)?,
         "pure_abi_probe" => pure_abi::probe(

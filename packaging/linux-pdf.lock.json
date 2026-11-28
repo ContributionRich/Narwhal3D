@@ -1,0 +1,1850 @@
+{
+  "distribution": "AlmaLinux8.10 x86_64",
+  "files": {
+    "pdf-data/fonts.conf": {
+      "bytes": 487,
+      "executable": false,
+      "sha256": "41394c31bfba461ab52fbeb1ebbcf6a4edb1d6286080494c28b8c45d7d4ded6c"
+    },
+    "pdf-data/fonts/DejaVuSans.ttf": {
+      "bytes": 756072,
+      "executable": false,
+      "sha256": "d76da875e720845eec452b26c58bb5bf4af474131166f618f57de2b5eb5f0c8f"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-0": {
+      "bytes": 3898,
+      "executable": false,
+      "sha256": "8ab40f3e3f4e1bf423096a19419985a1b1333f13eb8f432442512f582813a81a"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-1": {
+      "bytes": 4071,
+      "executable": false,
+      "sha256": "7eff6da168bad2b4155c440e884c3db013b7703cac7e64a41840a2ada1ff6721"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-2": {
+      "bytes": 4091,
+      "executable": false,
+      "sha256": "549cb49a6d7a2b9b6de7c66e896b5261f29f08f2ef55dbd34adf7b7fcc3d5dde"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-3": {
+      "bytes": 4191,
+      "executable": false,
+      "sha256": "146a79c62514b4e17c9d06cbce6666beb98adef9af726ec452c2ad98b1fbd6db"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-4": {
+      "bytes": 4211,
+      "executable": false,
+      "sha256": "200501445cdf5af4f829cb2f06e3273f751d5ea4e938227a43aaabd0daf079a6"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-5": {
+      "bytes": 4211,
+      "executable": false,
+      "sha256": "7f5a90b4b5de5fbc416ef820a017cd9a8a384b48fb155a0535c355ac23636376"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-6": {
+      "bytes": 4211,
+      "executable": false,
+      "sha256": "f73590f3a154b1e6cb0bf5e0d4a0733322935a3763abfe6296ebc89d0df77b51"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-7": {
+      "bytes": 4187,
+      "executable": false,
+      "sha256": "6f843260f8509a55a7f33d064aa5519109d37f51b669f590313fc2a892a202ab"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-B5pc": {
+      "bytes": 9130,
+      "executable": false,
+      "sha256": "6a395b9b42a52e4e53fc94aa21b569dc630daf087f7a4148413bd3808ad6f68f"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-ETen-B5": {
+      "bytes": 9531,
+      "executable": false,
+      "sha256": "09b287ad4952ab39276eec24f7fe5ec862d0adf5bd8a6a9926e544110ade7e56"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-H-CID": {
+      "bytes": 3424,
+      "executable": false,
+      "sha256": "0162d03dd3a71f3de947c65611f5c2c5bb115114f4a40ac0c3813d40f8493205"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-H-Host": {
+      "bytes": 9639,
+      "executable": false,
+      "sha256": "7ef0aadbb8464b829c3cfe1cc7e7b85fee393596e049394edc2b3470cd4c04e5"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-H-Mac": {
+      "bytes": 9195,
+      "executable": false,
+      "sha256": "9706560cd554f133b4238626b1d577e2ef5ee8e666fc3b2a1c1d7e25df43032d"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/Adobe-CNS1-UCS2": {
+      "bytes": 265146,
+      "executable": false,
+      "sha256": "9819b1ed7ea6afe3fbe7ad2b852c724a5166c6f4dfa428b061f75ba5403792d3"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5-H": {
+      "bytes": 7562,
+      "executable": false,
+      "sha256": "0cb00105360968d79687a65c662b00ffa681ad07a22a52e24a09cde6e8702f01"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5-V": {
+      "bytes": 2993,
+      "executable": false,
+      "sha256": "30e9780d32da47e1076233f42f7372437f1664f9ff38422b178ae6c70367f328"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5pc-H": {
+      "bytes": 7616,
+      "executable": false,
+      "sha256": "674db5f201ffa7bab006640318e8107bd3f5bddd5a4782b37c595a6e4a91dcaa"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5pc-UCS2": {
+      "bytes": 2716,
+      "executable": false,
+      "sha256": "02886bc8f4e085fc84fa89dca11cf308f6b99fcab06b08d486d2e477919f73c4"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5pc-UCS2C": {
+      "bytes": 273014,
+      "executable": false,
+      "sha256": "0e70224cf5af89edfef536d87ae3692e62ace90e5ef31d4858c5efcfbe44c227"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/B5pc-V": {
+      "bytes": 3005,
+      "executable": false,
+      "sha256": "276da943c2c94d6b864fdac00655039dbe55fb930d0b084e17ee9653be1d4b9a"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS-EUC-H": {
+      "bytes": 12315,
+      "executable": false,
+      "sha256": "a516640777886d060d95672f5540fbe516921d8df391e4008ffe471575e6ae32"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS-EUC-V": {
+      "bytes": 13347,
+      "executable": false,
+      "sha256": "5b1ec4caaabbad15d664de0aac9de15deb960b7a2e499b4a63eb33df35e63f96"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS1-H": {
+      "bytes": 5680,
+      "executable": false,
+      "sha256": "ab4b6a5cfa48d4ab4d338c749da5a7a408c1663debc5651c215006d18c14a467"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS1-V": {
+      "bytes": 3001,
+      "executable": false,
+      "sha256": "09abe0d58600175a4e1b647485f2e605cea4ff0e972251290088db09b2f0e9d4"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS2-H": {
+      "bytes": 4344,
+      "executable": false,
+      "sha256": "37137f438899e74080e4c4e33d63382b3530fbd33f95eea6131cf544a78d41ee"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/CNS2-V": {
+      "bytes": 2752,
+      "executable": false,
+      "sha256": "ae45dfd4dd3d80909617d1d04c3d659dd96eaa78f134cdeead81df2a09af2d04"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETHK-B5-H": {
+      "bytes": 23271,
+      "executable": false,
+      "sha256": "3164954e43edfcaaa43552d2aafcffc9806046b8e861269b44802eab6da3e7f5"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETHK-B5-V": {
+      "bytes": 3024,
+      "executable": false,
+      "sha256": "eacbc9b80c2f9096b2ed94a9755285707f0c5239771793698146363836fc26f6"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETen-B5-H": {
+      "bytes": 7772,
+      "executable": false,
+      "sha256": "ffc55726932bd3f47a03d39f6e20cad2c8d84bd1c0a7ba72bf1b3234bcb14a1f"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETen-B5-UCS2": {
+      "bytes": 276694,
+      "executable": false,
+      "sha256": "9df60482271b4e7b1af295ad15f9206a402e183adb5f543cb7d856d8884aeb55"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETen-B5-V": {
+      "bytes": 3043,
+      "executable": false,
+      "sha256": "bb100077690941547738958c6758b85371e11655e561357a4a1d85e18966d772"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETenms-B5-H": {
+      "bytes": 2798,
+      "executable": false,
+      "sha256": "b92ee213d0e2be252073f3e486b35aa0fd4dc82058c6958f3fef94a40b830830"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/ETenms-B5-V": {
+      "bytes": 3110,
+      "executable": false,
+      "sha256": "8059b22edcae6f33e1da8ba48d43e793f7df819fd715d9e40f2c6e4818a0cf27"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKdla-B5-H": {
+      "bytes": 23337,
+      "executable": false,
+      "sha256": "1b9cf4cef3a4e8d3f2519befe65a3e5e252a694f46064c8ccf85e4f1a3b6552c"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKdla-B5-V": {
+      "bytes": 3010,
+      "executable": false,
+      "sha256": "87bd1b9a7bc1141455dd83628eaf56d9f3f3d445a0f7bab55f5408cadd7f83ba"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKdlb-B5-H": {
+      "bytes": 20997,
+      "executable": false,
+      "sha256": "1a23eaf025561a5a8b82f9ed16f7113b008c5e8facc1d811e52956a0c27d4a4b"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKdlb-B5-V": {
+      "bytes": 3010,
+      "executable": false,
+      "sha256": "6de7bbcb904587b138fb1af351d67361e7be5c2347df1f91d80d1d3791683017"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKgccs-B5-H": {
+      "bytes": 13793,
+      "executable": false,
+      "sha256": "cbb67434405cab79a75f65d929820de47709def818e3554014b9949567f1042c"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKgccs-B5-V": {
+      "bytes": 3016,
+      "executable": false,
+      "sha256": "04bb39e9707a68b0068f230b87ab75d5b94e3190fcdce980bf7aa4a3f719e2a2"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKm314-B5-H": {
+      "bytes": 13606,
+      "executable": false,
+      "sha256": "a1c57564b5409224f5dc4a65b57a98c62421e24f96cd7f578a557b6c4a646160"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKm314-B5-V": {
+      "bytes": 3016,
+      "executable": false,
+      "sha256": "3e805564f989ddc7a14dc27dea2f79cb71196f9a769d364772dc5fa834b4bf83"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKm471-B5-H": {
+      "bytes": 16576,
+      "executable": false,
+      "sha256": "c87406329162ed9b58b0b929da8a3a45673d9e3fefeb2c9507877b021671ed24"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKm471-B5-V": {
+      "bytes": 3016,
+      "executable": false,
+      "sha256": "c3ab961f6a666ba8cdf6bb864be230b4f2c5f8b86d728c014282afc2bfeb1e9f"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKscs-B5-H": {
+      "bytes": 23322,
+      "executable": false,
+      "sha256": "8d744518528514fcd79fa2c3717bc842d8846674d90d317c2567565ce03f803c"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/HKscs-B5-V": {
+      "bytes": 3030,
+      "executable": false,
+      "sha256": "da9e6e22876a6dfe6b23d7c4cbb06263b6d9af1c6fd695c87ac621f28eba3041"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UCS2-B5pc": {
+      "bytes": 273324,
+      "executable": false,
+      "sha256": "dfa38c9fdd363639109f34f70510b23d8f8412e606b1a2e40609f77406d7e294"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UCS2-ETen-B5": {
+      "bytes": 287009,
+      "executable": false,
+      "sha256": "5d64023f10b7ff2e55850510e6ad8a5a39b1985830f8c3d37a6e259614822c76"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UCS2-H": {
+      "bytes": 326418,
+      "executable": false,
+      "sha256": "98185949aee0a566e2ce65c679ba55c126f5ce062ef627e91aa2b0da633f27a5"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UCS2-V": {
+      "bytes": 3040,
+      "executable": false,
+      "sha256": "71e2fbead52496de8bee9d226a44fb6b62b57fe3ae67666862570480a631fed4"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF16-H": {
+      "bytes": 253322,
+      "executable": false,
+      "sha256": "9639758966038a16df391727ab57bfd88747a5cc20d58ac0d890b10d2e884b8c"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF16-V": {
+      "bytes": 3029,
+      "executable": false,
+      "sha256": "4276fd2aaac5d39fb41fcd3fb2b74bfd38abbea04d70cfa52fa7c2b2098d5d0e"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF32-H": {
+      "bytes": 324726,
+      "executable": false,
+      "sha256": "f9f0a49ec0ec33868bed513c387998a9a2798046a857fed70bc9a50a203df50d"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF32-V": {
+      "bytes": 3109,
+      "executable": false,
+      "sha256": "b413e750bd315a4521f9c7689635043b55e3651502f856a0cc0d939ce6c2d8e7"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF8-H": {
+      "bytes": 290125,
+      "executable": false,
+      "sha256": "4bbd3db8f54925b5828617888d39282b79a907bfaa540183d2b0177d98cbc7af"
+    },
+    "pdf-data/poppler/cMap/Adobe-CNS1/UniCNS-UTF8-V": {
+      "bytes": 3065,
+      "executable": false,
+      "sha256": "e5991c5226cc284c0eba1525b94e5aef164e4ccc59ad2add36eaa5d2a06fe1f0"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-0": {
+      "bytes": 3361,
+      "executable": false,
+      "sha256": "e76a402984a6ef190fc1a8799911db676afb9a75842cdd56913aa589094bc970"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-1": {
+      "bytes": 3515,
+      "executable": false,
+      "sha256": "98ac195c3561d3dccec9ddc3b50a9bff852c93fd84e2f857af03ee2ca367b05c"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-2": {
+      "bytes": 4469,
+      "executable": false,
+      "sha256": "0538a3bc570a107ea27c5da2faf0a52fe4da991e9676943ca7b61d96e24c50a2"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-3": {
+      "bytes": 4468,
+      "executable": false,
+      "sha256": "1a24208e28f4f83ffafc51249f84c26d8e81cd3fbbd79a38f34aa5bc5bdc3774"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-4": {
+      "bytes": 5020,
+      "executable": false,
+      "sha256": "321ae01648104eefc93ef3498c4fcfe9ae8f2c82060529733e46902a0761966a"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-5": {
+      "bytes": 5120,
+      "executable": false,
+      "sha256": "329275020677b3dcbd727b22810d292916644dfbecc61d007ebf2c5a9f792879"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-GBK-EUC": {
+      "bytes": 91040,
+      "executable": false,
+      "sha256": "3c21cdb2ec69272fde1c7d4b8bc743ffb6490e49e2724b592832cd287f061a2d"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-GBpc-EUC": {
+      "bytes": 5572,
+      "executable": false,
+      "sha256": "3e6b2495e72cdffb19656226ec9deb57c5384c3cb603a009743b226c2abc7454"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-H-CID": {
+      "bytes": 3539,
+      "executable": false,
+      "sha256": "6fbfd1e27d5b885012a79c4201686407e1a5698857b5e289eb2b4636e6833235"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-H-Host": {
+      "bytes": 91618,
+      "executable": false,
+      "sha256": "035ad4ca64f101d6fb365dc93e6c6a382359f99a37505553cf009a46a04ef3d3"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-H-Mac": {
+      "bytes": 5553,
+      "executable": false,
+      "sha256": "ecad652e59f958430b140f78a6f227a0e169597a530a163bb0f2ad0df055cf5c"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/Adobe-GB1-UCS2": {
+      "bytes": 231913,
+      "executable": false,
+      "sha256": "7d3fc97c8e31ce1764184e67118040fff60d94ce538e06692739c53e7194c986"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GB-EUC-H": {
+      "bytes": 4496,
+      "executable": false,
+      "sha256": "b91ba64c909efddebfcdfdedb397555814afac92a6d970886742df475bae39bf"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GB-EUC-V": {
+      "bytes": 3169,
+      "executable": false,
+      "sha256": "3c612d6d586dc942c1376c65ddc95b328c848a946a71e65ae26135a08efcf617"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GB-H": {
+      "bytes": 4391,
+      "executable": false,
+      "sha256": "e3df925bbf8f994690078b32f6025add6be32bf481838fe87c932aae898dca5a"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GB-V": {
+      "bytes": 3145,
+      "executable": false,
+      "sha256": "611b285dd8769282d17dca5d6263dec33795ae760121ea0872f1907a13b578b7"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBK-EUC-H": {
+      "bytes": 83171,
+      "executable": false,
+      "sha256": "033abe0e628cae3a09ac4a1d5667290289e936573bcef88a47489fd53236f418"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBK-EUC-UCS2": {
+      "bytes": 224316,
+      "executable": false,
+      "sha256": "8390af214f25cb9ba35a847b9977f83e687a012abb081561cf90b2013cea9854"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBK-EUC-V": {
+      "bytes": 3158,
+      "executable": false,
+      "sha256": "9d95e712012d2750f69990371163a036acbc05dacc1b9763e4ccd5a075a86f54"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBK2K-H": {
+      "bytes": 90995,
+      "executable": false,
+      "sha256": "7e75a96093339ea10427072542fe744b60dccf8feae19756b4011ddf1263cb8f"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBK2K-V": {
+      "bytes": 3551,
+      "executable": false,
+      "sha256": "b14bb7804b4f55b6a49578508243311fe265886577feb58db4be8a32419ca148"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBKp-EUC-H": {
+      "bytes": 83152,
+      "executable": false,
+      "sha256": "21ae996f487ca0df80ded68409a5e739dabc6f541f773c801bc2a7c12b2b0955"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBKp-EUC-V": {
+      "bytes": 3164,
+      "executable": false,
+      "sha256": "98f008c8fe4915c1eb45774cd3978b3d313f0996624f70da4645167a278b3f71"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBT-EUC-H": {
+      "bytes": 46842,
+      "executable": false,
+      "sha256": "796a8d58963883d2c0837bf6e413b599b7f9721876741f90e28f0fd6e674efe3"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBT-EUC-V": {
+      "bytes": 3177,
+      "executable": false,
+      "sha256": "4de91743889f07ce4eed8f21762ba53ff8b521a0fbae9885931ca483fe612a0f"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBT-H": {
+      "bytes": 46737,
+      "executable": false,
+      "sha256": "371ef1c0318a5f743509646b13d5d532e995c90e81c6b90b42101a726a81df41"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBT-V": {
+      "bytes": 3153,
+      "executable": false,
+      "sha256": "3a8958183a7ffb5e1081b99075b008cb5bd89fd58041e86fdf6830a50a543cc2"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBTpc-EUC-H": {
+      "bytes": 46872,
+      "executable": false,
+      "sha256": "ae4800fb9f1a0c2ee95a5a858a476b1d5b240bd88cdc2c39a78ba36dbbcb5078"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBTpc-EUC-V": {
+      "bytes": 3189,
+      "executable": false,
+      "sha256": "13bdbef47e9ecd5b3d675f58fd12680d40ee301fc40a44d12da58af8b31d6a72"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBpc-EUC-H": {
+      "bytes": 4524,
+      "executable": false,
+      "sha256": "a3f4de11cdcc373c941c10885b6f5000700318783139146e1a69d560a36d00e6"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBpc-EUC-UCS2": {
+      "bytes": 2798,
+      "executable": false,
+      "sha256": "1b1d67fcb0b56cc15102203439db22902063eed406ded63b9fa3ab065eb2583a"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBpc-EUC-UCS2C": {
+      "bytes": 142825,
+      "executable": false,
+      "sha256": "5c8efe4176c4eb5495f2b7e568636814689c92432dcdbda47d92d907987da135"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/GBpc-EUC-V": {
+      "bytes": 3181,
+      "executable": false,
+      "sha256": "1b1e95d224eb370b6ad06c17c89d334ad1d22233c13e9348ee809de419ec2605"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UCS2-GBK-EUC": {
+      "bytes": 234125,
+      "executable": false,
+      "sha256": "236ca53701277d6c75e4b9089ce62b3e2ab8b264ab74f092cfe94f7cc9dd0cad"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UCS2-GBpc-EUC": {
+      "bytes": 189608,
+      "executable": false,
+      "sha256": "160db5a484dca8d87899481a468e3cdb2e24c0ca7a2dd059ec4b911340a95cf5"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UCS2-H": {
+      "bytes": 274452,
+      "executable": false,
+      "sha256": "c22edb1040ea7beffc704a6047954bdcf12522ffb9d1de627f4a9814366f3b92"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UCS2-V": {
+      "bytes": 3236,
+      "executable": false,
+      "sha256": "67c080ba51e12123b3cb2bf15ba1742f387ff53bc586d87d0387b59d682322b9"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF16-H": {
+      "bytes": 200050,
+      "executable": false,
+      "sha256": "607e6e9e52b6584275e8fd9a2ffa018fc16166e010b1d8c15f4f31fc463f7ec8"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF16-V": {
+      "bytes": 3130,
+      "executable": false,
+      "sha256": "be09c645ad7410bfce8b51eb99d4a028bba2bdb22de9273f1c620685bba844c5"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF32-H": {
+      "bytes": 267978,
+      "executable": false,
+      "sha256": "52344bb405038a609fb81043c4f1cc05eaf2815d86a5451d3fc2af945dfba5f5"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF32-V": {
+      "bytes": 3246,
+      "executable": false,
+      "sha256": "9f3b0c1c5eb788a9c688835c88a9fb28c57b547af8ba570b4b5dcece2093759a"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF8-H": {
+      "bytes": 237903,
+      "executable": false,
+      "sha256": "bde7174ce641781b4bf8ffba70dc7a55ceb5245d98d97e65a7a515035782c5b7"
+    },
+    "pdf-data/poppler/cMap/Adobe-GB1/UniGB-UTF8-V": {
+      "bytes": 3184,
+      "executable": false,
+      "sha256": "b58ad871c0e25b7e834bcc860f8963053a119e61bf4a2500e486381f6aea5ad0"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-EUC-H": {
+      "bytes": 14865,
+      "executable": false,
+      "sha256": "9204f25d158617452671555eb2897c356c33a19bd25763291cbaae064bb9a7ca"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-EUC-V": {
+      "bytes": 3291,
+      "executable": false,
+      "sha256": "ca15b9477b004a3aa5e3dd8e180bb0b3cca24b4d9caba5e9e1acb51f01569411"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-H": {
+      "bytes": 14742,
+      "executable": false,
+      "sha256": "1f38190165455456a5c0de80cc71dc62e10a5618249074235c2ce5087e768b3e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-RKSJ-H": {
+      "bytes": 14896,
+      "executable": false,
+      "sha256": "f3ce599a95f59ad0e08f7b7c64ba98d7f9d6a44eed32b6f201f32753cf57be08"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-RKSJ-V": {
+      "bytes": 3297,
+      "executable": false,
+      "sha256": "f6e03fb8c7d01b4de16d16568a0363baaf07ed5eab707fa465c2fcd0a2fc3891"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78-V": {
+      "bytes": 3267,
+      "executable": false,
+      "sha256": "8b492aa05623925bead77a7a1738d8833bc7904543b0b9073e12e5ad52350b02"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78ms-RKSJ-H": {
+      "bytes": 16569,
+      "executable": false,
+      "sha256": "729091d7b3458ddac484ae09cd39df8e5b63c6e98cafdc405c7edcbe21d45db4"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/78ms-RKSJ-V": {
+      "bytes": 4278,
+      "executable": false,
+      "sha256": "df6a5451ade2f7afc3e2d25179244e11e9451a66f3be4ca453b37c5af62655ca"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/83pv-RKSJ-H": {
+      "bytes": 7149,
+      "executable": false,
+      "sha256": "9a3eef14a2de9b77fca27d06d870fbcfe77a744903a6389117803d257a50071c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90ms-RKSJ-H": {
+      "bytes": 6139,
+      "executable": false,
+      "sha256": "3e61b815da44646d1ebe1d5a82cb12d4d03338bb20165dced195a8c20caa30d5"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90ms-RKSJ-UCS2": {
+      "bytes": 106262,
+      "executable": false,
+      "sha256": "c983bcb8a0aef6860c092c93921fe4e147f4eac1ff75b34262a8e867cd77f3c4"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90ms-RKSJ-V": {
+      "bytes": 4298,
+      "executable": false,
+      "sha256": "53560c4509c053c340bfdc1b55f035c560720037d4b605378acc42a09b5125c9"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90msp-RKSJ-H": {
+      "bytes": 6070,
+      "executable": false,
+      "sha256": "4c9abde96aef63b304ff7bb3f407f17aafd03db6a83e56f007bfec596437d244"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90msp-RKSJ-V": {
+      "bytes": 4281,
+      "executable": false,
+      "sha256": "0afeccb6f5c0c6b51b6c2622163a7bbf1b95fac4ba1f187c63f69519eb6889e5"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90pv-RKSJ-H": {
+      "bytes": 7884,
+      "executable": false,
+      "sha256": "8befaac7ca172c356e54ca78117fe3b917b2f499b6acc96a4d5e6086fa49bea5"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90pv-RKSJ-UCS2": {
+      "bytes": 3323,
+      "executable": false,
+      "sha256": "71d08ff88e1e538ebceea4099239bba67f1301f2072ada0297cb97fa46af0296"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90pv-RKSJ-UCS2C": {
+      "bytes": 97360,
+      "executable": false,
+      "sha256": "925f8f274cfdd9624e181fae6540371f2cbd778b1970633f3153e1f1c2291adf"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/90pv-RKSJ-V": {
+      "bytes": 3784,
+      "executable": false,
+      "sha256": "492cfe0086967d226175ee3c245eae11ed28b52f02e055200e78696304b7adf0"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Add-H": {
+      "bytes": 14923,
+      "executable": false,
+      "sha256": "863c09c0bf348a9a9edacccd6f20a2666b7c29f3e6f5cb7ad4d82d32df4d618e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Add-RKSJ-H": {
+      "bytes": 15107,
+      "executable": false,
+      "sha256": "c2eb1b5b2f4adce2e24115bae9b8fb372a9999f0c14885026934c239350a84fa"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Add-RKSJ-V": {
+      "bytes": 3892,
+      "executable": false,
+      "sha256": "5c1d67bf476a368fb824bdbe7b1d55462035af1aef546960a6ed0dafe389c42c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Add-V": {
+      "bytes": 3862,
+      "executable": false,
+      "sha256": "b136236164da0174dfe99e6f7bed1e07da1f65933c71a7bdf89755c7fd3f94a6"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-0": {
+      "bytes": 3410,
+      "executable": false,
+      "sha256": "2b4dd38c7624b197302855c610a5cef41b11d5dc27440e77d9a6d8e2fe4dba69"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-1": {
+      "bytes": 3411,
+      "executable": false,
+      "sha256": "cd6013ed0891cd5ad6d5b0047b4628274c226edc472394ef9fbecbc2edd8efd3"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-2": {
+      "bytes": 3449,
+      "executable": false,
+      "sha256": "f6955d5c194a86f9f4809900d3d39fb7286f13a1346c1506ab2f7b278c7d723e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-3": {
+      "bytes": 3459,
+      "executable": false,
+      "sha256": "32fad657055a1a73e060160949b2c32018c94e2d3560ed6b7fecf7b405b139dd"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-4": {
+      "bytes": 3937,
+      "executable": false,
+      "sha256": "5602d5805607081eeb3d6ee2319e952e8c89dca44492b035978846508c074e51"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-5": {
+      "bytes": 4317,
+      "executable": false,
+      "sha256": "05369ff57d9be61bb5fbb45e7230e6eadb0a110a97aa1635309fc0a913f75e5a"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-6": {
+      "bytes": 4537,
+      "executable": false,
+      "sha256": "50120ed7cfe49004ba11ad60c2f81ffff21d7574109a5edb5509ca5e1bc47c0c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-90ms-RKSJ": {
+      "bytes": 7605,
+      "executable": false,
+      "sha256": "9ebfd542c277e2631ce46eb355c53ff8f37b2a7c71a9ce25ab45d6ca5b87ff68"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-90pv-RKSJ": {
+      "bytes": 9596,
+      "executable": false,
+      "sha256": "b3a8f2e33ecab2ca556623ca5990e114de306d2c556bfbf08962abd07d8a0579"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-H-CID": {
+      "bytes": 3723,
+      "executable": false,
+      "sha256": "ba8c0d9022bf11e854a2ecfd74695c58683671a8424ad78a323d420842413331"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-H-Host": {
+      "bytes": 7855,
+      "executable": false,
+      "sha256": "bed84e2361be59b877dc43fefef7b2f3cbbc4be92a6f9a3ea398d1669bb20360"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-H-Mac": {
+      "bytes": 6782,
+      "executable": false,
+      "sha256": "b57d6bb65c65f2cadc16bb8f4973245815748247e1c2f88ff6d311adfc83d367"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-PS-H": {
+      "bytes": 23503,
+      "executable": false,
+      "sha256": "7f82c4106badf9c713ff2a77be11fdf0a5c680444a00ff52a71fad3cbc234036"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-PS-V": {
+      "bytes": 14283,
+      "executable": false,
+      "sha256": "de8bcd2376010315a7eeecb38bfdbbb7185698d02af0339f278f976d42d935ed"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Adobe-Japan1-UCS2": {
+      "bytes": 284124,
+      "executable": false,
+      "sha256": "8bb2834502c91ac251a28a0f9f16a4236a55b90a70cd9626fc35434236a9ea6b"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/EUC-H": {
+      "bytes": 5144,
+      "executable": false,
+      "sha256": "1cafae78a401b5193fefc349c6166d29a1f3833c25a4cd01c7ef34966f24e332"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/EUC-V": {
+      "bytes": 3292,
+      "executable": false,
+      "sha256": "d625b43b3ed32619db0dfaa1636c1dc97cbc5a9fa030946e746db7176727fcea"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Ext-H": {
+      "bytes": 15493,
+      "executable": false,
+      "sha256": "0297ad85dcca85a6275777d0d8f7ad8b26166a31869d3f05858033af9ce5f950"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Ext-RKSJ-H": {
+      "bytes": 15676,
+      "executable": false,
+      "sha256": "aa76fbc7b5b1b0d84d82e6337e0ea4bc3fb94dd6ab6ae51f4d2dffa5560a8e89"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Ext-RKSJ-V": {
+      "bytes": 3550,
+      "executable": false,
+      "sha256": "42fc95a2749269afc07fa63100b4c3731b6345e34a0b5f07e7f7eb9813a96d75"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Ext-V": {
+      "bytes": 3520,
+      "executable": false,
+      "sha256": "6bd494ee5faad71d5da1fac88e55cc0c464b610fec2da9803685ec9bca4d1be1"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/H": {
+      "bytes": 5010,
+      "executable": false,
+      "sha256": "6a9a490592a6a014b61b8e778da66f27f837558e4de8b40081c821909afd88cf"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hankaku": {
+      "bytes": 2890,
+      "executable": false,
+      "sha256": "0a9ea065c17bf75113515995c9aa02e72caace50a071bb77ced7ec9481ca04dd"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hiragana": {
+      "bytes": 2864,
+      "executable": false,
+      "sha256": "c7c828857a1fc7d7daf76ec060b0a612fd59478c8cc3ad132c4037e1f7c458ca"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hojo-EUC-H": {
+      "bytes": 4695,
+      "executable": false,
+      "sha256": "72dd8cdfbe88ea9804c86a5a4385641b919dc7497d97aa2a742951b18acfa6be"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hojo-EUC-V": {
+      "bytes": 2778,
+      "executable": false,
+      "sha256": "bb4651c5c5ea059a6cd3e52696b078092150ad23c43598ea691b5eaedd017e78"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hojo-H": {
+      "bytes": 4345,
+      "executable": false,
+      "sha256": "5f428edfd391ef33ef315d2f83774c11a1e511be244387490c54eea9ac80f31f"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Hojo-V": {
+      "bytes": 2754,
+      "executable": false,
+      "sha256": "83b4c285a8ea129695bf162aaada682df35b3002f4a620dcc3907ac49247b664"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Katakana": {
+      "bytes": 2780,
+      "executable": false,
+      "sha256": "20daaf43624eb0b6e51d247cdb866c92aaf6288149108f5a0845d6e7df344f40"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/NWP-H": {
+      "bytes": 17367,
+      "executable": false,
+      "sha256": "e4f8fab917521b9a0970040ce3fccdf780d7bd6cb01eecf6ae55a1847a4eb347"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/NWP-V": {
+      "bytes": 3672,
+      "executable": false,
+      "sha256": "afdc1749c1f4fc4fbc3d4381f74b4fa8f2305a452f9b8bf91105c0673a922144"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/RKSJ-H": {
+      "bytes": 5193,
+      "executable": false,
+      "sha256": "be15fb87786a01ae6b0096fa65e73db6e14957629c96db003f60a8cf6130398f"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/RKSJ-V": {
+      "bytes": 3298,
+      "executable": false,
+      "sha256": "0d14f150e1212035294e38454dd4999086ef35ae55d2e93718e54625aadd4b09"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/Roman": {
+      "bytes": 2757,
+      "executable": false,
+      "sha256": "5218ce791fb8ba8d5718abacdd26eeac248431154e3b089069e72671bb282cc6"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UCS2-90ms-RKSJ": {
+      "bytes": 149764,
+      "executable": false,
+      "sha256": "4711c8d8ba43a54ccb97b76767366d7cf6a77c8687e3a6061f20674ac416fe68"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UCS2-90pv-RKSJ": {
+      "bytes": 143037,
+      "executable": false,
+      "sha256": "3ec5d1a1795d07866a24a35de87b1060d328725b6dec3f521748df3ec40e8a2d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UCS2-H": {
+      "bytes": 83661,
+      "executable": false,
+      "sha256": "81c1ec8f28e047cd18c8bd7c31a25134f7818bb8743c8cc8bbf06c5176f9b9bf"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UCS2-V": {
+      "bytes": 2783,
+      "executable": false,
+      "sha256": "3be3bd1556d73c3402c2a3208959b0ba2da29047c828af98adbdfe861778f6f6"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF16-H": {
+      "bytes": 63017,
+      "executable": false,
+      "sha256": "6268585cbd8b55d9b4c336c7f234cd0dc312fa1f7006a79ff0dd9ff100d4fa9b"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF16-V": {
+      "bytes": 2789,
+      "executable": false,
+      "sha256": "13e8159de4aa6a87097bfc84c5b8b9fec2cb30a822fab0f62c4f96b9a9ba065d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF32-H": {
+      "bytes": 84890,
+      "executable": false,
+      "sha256": "5189b7cc51aaf30dc6d79e89225adb89429d8c97db7522f89bebc039d83a83cd"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF32-V": {
+      "bytes": 2789,
+      "executable": false,
+      "sha256": "2ff1aad88d70a9ee130fa601a0445ffa661fe2fd3dc988fb1f6874265b770876"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF8-H": {
+      "bytes": 73770,
+      "executable": false,
+      "sha256": "0bc73255974de7d53edd82e0402106926dd06bd4396276c9868e37f1aaf7303e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniHojo-UTF8-V": {
+      "bytes": 2785,
+      "executable": false,
+      "sha256": "a0b4f9ecec6ccdeb58531b783e80d3bb2e571b8899e9aa6caecae5fa23844a96"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UCS2-H": {
+      "bytes": 168666,
+      "executable": false,
+      "sha256": "68ab170554e2a8ed50e03b499f69ae24b9e0c1cb61f64cc5a240317fd2397af6"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UCS2-HW-H": {
+      "bytes": 2889,
+      "executable": false,
+      "sha256": "9342b408e95553f7cfeba7ea97cbbc51f22f153107ffadf08d847caae92c2856"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UCS2-HW-V": {
+      "bytes": 6660,
+      "executable": false,
+      "sha256": "b25391bd5656fea80c31b0ffb9e1e40914edf67e67780779d6332801019c1651"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UCS2-V": {
+      "bytes": 6578,
+      "executable": false,
+      "sha256": "1ce5576c9289642a55ddb1c2bffcd457e4db9e04ae4c7eeaef18cdcdd13e47e9"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF16-H": {
+      "bytes": 188140,
+      "executable": false,
+      "sha256": "e4bf80a15d685af734879535f67fcfcd2884cfc56430ebe50cef00129f616f0d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF16-V": {
+      "bytes": 5762,
+      "executable": false,
+      "sha256": "a30b23aa43926dfd044310243f4d464798c2f8130509a4936dd03c3408a77c3c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF32-H": {
+      "bytes": 245332,
+      "executable": false,
+      "sha256": "4de011b160769c22abdf97710ff5fce1ae1cdd7813a292ed7772c4c34ca3ac54"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF32-V": {
+      "bytes": 6770,
+      "executable": false,
+      "sha256": "1d12ba2f7951e9ee771ee63a7d7f2309716a663ea5470510ac30a1df84a9f119"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF8-H": {
+      "bytes": 216369,
+      "executable": false,
+      "sha256": "29dfdbfe5dc6e9bae41dfc6ae2c1cf7b667f5b69b897c8f14eb91da493937673"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS-UTF8-V": {
+      "bytes": 6275,
+      "executable": false,
+      "sha256": "ad552351e38d552d2b7571266b51b5a3e47eb279f6775df48740ce80d3440c12"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF16-H": {
+      "bytes": 188220,
+      "executable": false,
+      "sha256": "6c1615ac00d22b393a97df98bd0f5fa295f986b21bb81c60ce18b3820ebe766d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF16-V": {
+      "bytes": 5786,
+      "executable": false,
+      "sha256": "87fc22322e86586dc991fa469eccd39388c4acb71598697b842f53a98a86f0a1"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF32-H": {
+      "bytes": 245412,
+      "executable": false,
+      "sha256": "1bd78b0e821fd39d7ce8a94ed930a85cadd10c6270dcb046334c2c9aafba1f5b"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF32-V": {
+      "bytes": 6794,
+      "executable": false,
+      "sha256": "b11bb4c19c067e77bd88ee4ccc96e6c7edc3a82874b5dd74f9d87896c4179c4c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF8-H": {
+      "bytes": 216447,
+      "executable": false,
+      "sha256": "85fa69df4e79456770b63ec76eef768a991b5a62602c7ebc3a49c51ad054cf0a"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJIS2004-UTF8-V": {
+      "bytes": 6297,
+      "executable": false,
+      "sha256": "00d7068a17ba9cfd8dd51b069d893cec683683a0add94eebb531edcd89f79d1e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISPro-UCS2-HW-V": {
+      "bytes": 6798,
+      "executable": false,
+      "sha256": "661e940afce75c10f66af74066c602e13ee7abc527c0694007bf78b863219208"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISPro-UCS2-V": {
+      "bytes": 6687,
+      "executable": false,
+      "sha256": "8d597e58c8121160707048ec7691fca0a61e61bef8cd2995cbc78f030a838309"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISPro-UTF8-V": {
+      "bytes": 7536,
+      "executable": false,
+      "sha256": "80881c579b684c90a047d24d54cdf8212c1d33937604ffef2e815f5381b10757"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISX0213-UTF32-H": {
+      "bytes": 245294,
+      "executable": false,
+      "sha256": "26bc4d47e8f42ea138fd204fcade407f2917594c4095e6c95edbf2002cb86550"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISX0213-UTF32-V": {
+      "bytes": 6821,
+      "executable": false,
+      "sha256": "5979f806902daafce9c0527fa405f3fe69451852f0283f7c6069ecec76626440"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISX02132004-UTF32-H": {
+      "bytes": 245375,
+      "executable": false,
+      "sha256": "bc1d4f02179c932b9735483f4ee35c04b0401bfbc9db509ea9ca380426a32fdf"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/UniJISX02132004-UTF32-V": {
+      "bytes": 6845,
+      "executable": false,
+      "sha256": "dd4c8ec06cd1677e49e7f6aad47d491f97dd206b046fb70ff32894d0798f9e99"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/V": {
+      "bytes": 3268,
+      "executable": false,
+      "sha256": "8eea3990962a4c5dd9565fcdfd30497747b6004940bb8d71fa2e0b0669eb9237"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan1/WP-Symbol": {
+      "bytes": 3162,
+      "executable": false,
+      "sha256": "124b0772da80467db395b6e01e8b515e9938412028fff3d5778421d4528020a2"
+    },
+    "pdf-data/poppler/cMap/Adobe-Japan2/Adobe-Japan2-0": {
+      "bytes": 3237,
+      "executable": false,
+      "sha256": "0c48b19cd2f35c83346b9bdcc1dbd77d72094c3acb63c2a9ec9ab9fca1bb251d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-0": {
+      "bytes": 3502,
+      "executable": false,
+      "sha256": "42e101979a0bc9c6be70953a4fb48c08125b9bd5796ae28e94db895cc4be95b8"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-1": {
+      "bytes": 4158,
+      "executable": false,
+      "sha256": "f616944e888715094c26df1022793ba36fa0bc8c85f24afe24a54f4335bec794"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-2": {
+      "bytes": 4157,
+      "executable": false,
+      "sha256": "9427c3c553839905f70ae472002a450e81d0191341c468d981ebbfbabb13f3c3"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-H-CID": {
+      "bytes": 3108,
+      "executable": false,
+      "sha256": "4d30906275046845ecd6c32df1101af0903ebe499b81b1dfb46ba97ff09e371a"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-H-Host": {
+      "bytes": 16869,
+      "executable": false,
+      "sha256": "cfccfcc5bc60a160c79a8b5cf64070e9b2085d93dcc156738b4794f1be56731d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-H-Mac": {
+      "bytes": 12437,
+      "executable": false,
+      "sha256": "84199bf57bf986466badfb3be6f9a5d274e31b55404e510cd1ec6730e05e4001"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-KSCms-UHC": {
+      "bytes": 16674,
+      "executable": false,
+      "sha256": "081e4b9f3bee8f2547df33246e9d14cb574136fc37ddf2d5e2ba2b23019da379"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-KSCpc-EUC": {
+      "bytes": 12521,
+      "executable": false,
+      "sha256": "fb6da1b4bc40f2718b38394cd90255f05318d8aedc7981468ecf0ad5929b2b76"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/Adobe-Korea1-UCS2": {
+      "bytes": 146876,
+      "executable": false,
+      "sha256": "bb506aaf38e76d8412fb88ee00ea3d4bfe7dcc6bcfec301b68dfa6322243693e"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-EUC-H": {
+      "bytes": 11797,
+      "executable": false,
+      "sha256": "f268fb79ed2a9736105c13d1f1ec55e814f9c426130c588817b1c356fbb6be4f"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-EUC-V": {
+      "bytes": 3105,
+      "executable": false,
+      "sha256": "2c421315c0dc7061b6c6f01a8792d3b2421637186b5e1ffbb88c928592f9b6f2"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-H": {
+      "bytes": 11706,
+      "executable": false,
+      "sha256": "c4bf1c81d9be92aaacc73fcd3d882e6f9126d39c53e8b989a5b8a324a9e3f2c1"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-Johab-H": {
+      "bytes": 84319,
+      "executable": false,
+      "sha256": "988f68daa2bc7e6ddb1675197ba84f4f8811c860f10001e509fdbfb6b89accba"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-Johab-V": {
+      "bytes": 3119,
+      "executable": false,
+      "sha256": "d07529d048d9d2f2bc861ec54179e5459ed6e7f02a480db55658ad9392079930"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSC-V": {
+      "bytes": 3081,
+      "executable": false,
+      "sha256": "013e39d47d83e3378e0894574196e8900bb83523a3755fc64fb1fb28eb030653"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCms-UHC-H": {
+      "bytes": 16009,
+      "executable": false,
+      "sha256": "7f49fab977946f9263c3cf799d93e63e6de384080516cf624180ab4eb8e777c6"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCms-UHC-HW-H": {
+      "bytes": 16005,
+      "executable": false,
+      "sha256": "a6e08f9dec9d166cf5f5248b026bba11a0f937b7dc4b6998d8b312a17a7b7039"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCms-UHC-HW-V": {
+      "bytes": 3118,
+      "executable": false,
+      "sha256": "e7d891149f7054ec649605cba58b06ed1a4a569993ac6c0d7bf58c96ebe4123d"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCms-UHC-UCS2": {
+      "bytes": 182629,
+      "executable": false,
+      "sha256": "a614bb927b8f3f059a63cf03569441e5363ca90352413220cb03ecec21c46991"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCms-UHC-V": {
+      "bytes": 3119,
+      "executable": false,
+      "sha256": "06b2a89bd60c6bca8d39aa265bba92d70d8c69d328a8ab3b45634ec11a7bfd01"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCpc-EUC-H": {
+      "bytes": 12624,
+      "executable": false,
+      "sha256": "8e6f3620a2d4a8845ce37c2625a4c7adecc8c8740a914870482dac0b718849dc"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCpc-EUC-UCS2": {
+      "bytes": 17269,
+      "executable": false,
+      "sha256": "05af4eac6f3030f2c7c50f10f81ded535f95020e68cad4999b704c6ca87c5baa"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCpc-EUC-UCS2C": {
+      "bytes": 151130,
+      "executable": false,
+      "sha256": "08f40ae609e6af33ad55fbef3ee2508626a9c8af04358e010cac6d4fafad09e8"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/KSCpc-EUC-V": {
+      "bytes": 3117,
+      "executable": false,
+      "sha256": "4e4b603f56a8f3d662f41d3f254a8e75da6f81d1b5da037a50142e9865049072"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UCS2-KSCms-UHC": {
+      "bytes": 188922,
+      "executable": false,
+      "sha256": "d079bf0bdb054c642a20dbf9009e2eb7fdb5c746358cb156ad046d49a3e1c5af"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UCS2-KSCpc-EUC": {
+      "bytes": 147792,
+      "executable": false,
+      "sha256": "98f13f4ea16508df9eea2bd4758a5ee0840078160c73c2be5f4c14ec8db87f73"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UCS2-H": {
+      "bytes": 166078,
+      "executable": false,
+      "sha256": "7a13816489a51c29a645ed845e1fa05ac15d5600ef6dff14501f9341be672a02"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UCS2-V": {
+      "bytes": 3145,
+      "executable": false,
+      "sha256": "924a686e77e18a5585b414adf50d2f2d73c739d7b409485ad94bee0f723e559c"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF16-H": {
+      "bytes": 123007,
+      "executable": false,
+      "sha256": "98cdcfb4f72386433e4791f40ddf43017261ccdb8c991fb8a33e77b5862be1fd"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF16-V": {
+      "bytes": 3099,
+      "executable": false,
+      "sha256": "ea8eeb8dcc605936b4bedc5a8ba4cbfc834c8f9ae4b704c921f2fb5d400cf93b"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF32-H": {
+      "bytes": 165079,
+      "executable": false,
+      "sha256": "26a4aca90868f9cb28fa24b67d9acd713aff3b33264370d6afd0beed1e4891b3"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF32-V": {
+      "bytes": 3199,
+      "executable": false,
+      "sha256": "a31f6e3fa353f366c581adc9266178ad5868af9b1c2b0a8fda5b7e65a6ff9c6b"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF8-H": {
+      "bytes": 145914,
+      "executable": false,
+      "sha256": "7790301c000f4ffc3b1ce7b5511cf9686983385b5a8e2ee7564e204f40b77939"
+    },
+    "pdf-data/poppler/cMap/Adobe-Korea1/UniKS-UTF8-V": {
+      "bytes": 3145,
+      "executable": false,
+      "sha256": "ed2cc23ad632133ccdd9e6c641bc8f8df4a98871088c4e4eb66fdb4b96c9dc04"
+    },
+    "pdf-data/poppler/cidToUnicode/Adobe-CNS1": {
+      "bytes": 97321,
+      "executable": false,
+      "sha256": "3e72e52c617851408a410008bd6dc87b925f627e8285acfc5753274d4131c8f5"
+    },
+    "pdf-data/poppler/cidToUnicode/Adobe-GB1": {
+      "bytes": 151426,
+      "executable": false,
+      "sha256": "3fd9899c969014a638572b2806eacc2a96bcd3bb8b6f096f3623db137382fa01"
+    },
+    "pdf-data/poppler/cidToUnicode/Adobe-Japan1": {
+      "bytes": 115643,
+      "executable": false,
+      "sha256": "3b54706d4d6c20672f1c85b945a182dacbc647a406014083be611da67990e051"
+    },
+    "pdf-data/poppler/cidToUnicode/Adobe-Korea1": {
+      "bytes": 91760,
+      "executable": false,
+      "sha256": "e98ad4e7e04f6572f517aa68ccd45708ae51e99d22d2cb9136f1370a77be1f68"
+    },
+    "pdf-data/poppler/nameToUnicode/Bulgarian": {
+      "bytes": 630,
+      "executable": false,
+      "sha256": "00efe0a6ddd763df4fd239465d353dcd326738e396da805ab7994ae7b5315b3b"
+    },
+    "pdf-data/poppler/nameToUnicode/Greek": {
+      "bytes": 125,
+      "executable": false,
+      "sha256": "eb4bd7a5aeb9c4f99308674d7df009612ea21cd7b76b5023043656327e9db529"
+    },
+    "pdf-data/poppler/nameToUnicode/Thai": {
+      "bytes": 3074,
+      "executable": false,
+      "sha256": "3f7acc1a23fc18e81d6cee5046deb591936228fac624c2a6012cd0902502fb2d"
+    },
+    "pdf-data/poppler/unicodeMap/Big5": {
+      "bytes": 133464,
+      "executable": false,
+      "sha256": "31c276592bc6aa44bf0338757d73dede5dc4dd09eb79472ee7c0215282d47c46"
+    },
+    "pdf-data/poppler/unicodeMap/Big5ascii": {
+      "bytes": 133839,
+      "executable": false,
+      "sha256": "2a92ebe937550cefba3abaf33d20056234de3bc81c0e3a336349eb9499d12983"
+    },
+    "pdf-data/poppler/unicodeMap/EUC-CN": {
+      "bytes": 67589,
+      "executable": false,
+      "sha256": "4f90e3fd8ba4ca94bfe1eea1cacdf15ed5d02d77d09a55aa2bb9ef03816c4b1d"
+    },
+    "pdf-data/poppler/unicodeMap/EUC-JP": {
+      "bytes": 66176,
+      "executable": false,
+      "sha256": "f4bacc9e75a81fc86414f686bf05b89e0396728994ff1bc5bb8ea503340b0ba0"
+    },
+    "pdf-data/poppler/unicodeMap/GBK": {
+      "bytes": 117814,
+      "executable": false,
+      "sha256": "2693e8933084f2bebe5da193b7616cd25bd62fab38641bd8fec3f4af34c50e03"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-2022-CN": {
+      "bytes": 67033,
+      "executable": false,
+      "sha256": "8696d96951fef68e182891c707f1ee66d25a1785b2a0d09c60d422db3df51dd7"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-2022-JP": {
+      "bytes": 65913,
+      "executable": false,
+      "sha256": "2f4641fac5148e6bb712a9bc9be8655c760c7596974ba3d05ad671d28dcebcf7"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-2022-KR": {
+      "bytes": 68259,
+      "executable": false,
+      "sha256": "c19749f40658338a772262a23a64f7962c156ab0f12f385f9c8c61208e6d26ff"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-8859-6": {
+      "bytes": 524,
+      "executable": false,
+      "sha256": "a620e0c7ef3d6c8ae8f56f590ac21bbd5e42314f71077e7bcbf53d808c76c58e"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-8859-7": {
+      "bytes": 584,
+      "executable": false,
+      "sha256": "5246aef75d0ed7ea4796f48a4f3e0ec1c3be7bef5138b5f041dcfb7aff022f20"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-8859-8": {
+      "bytes": 605,
+      "executable": false,
+      "sha256": "82be4e7e2d0f084319542e4868631f440bacdd67f7b3f15179993108e04ec805"
+    },
+    "pdf-data/poppler/unicodeMap/ISO-8859-9": {
+      "bytes": 626,
+      "executable": false,
+      "sha256": "049882b3cc7adfabe0f21ec640d3975a932c19746762e9380a426d49d462a998"
+    },
+    "pdf-data/poppler/unicodeMap/KOI8-R": {
+      "bytes": 904,
+      "executable": false,
+      "sha256": "e46b7a351dd44b17670a671dfe21c54b328c15a183d8333817dc820d4a6cf226"
+    },
+    "pdf-data/poppler/unicodeMap/Latin2": {
+      "bytes": 1346,
+      "executable": false,
+      "sha256": "02542912156229b76e3254e5f12c130fe8b33bc4242791f7f794325336fda3ed"
+    },
+    "pdf-data/poppler/unicodeMap/Shift-JIS": {
+      "bytes": 65988,
+      "executable": false,
+      "sha256": "938c672143600d578e589965647580d4ea303e823adfdebf46239b923fec3842"
+    },
+    "pdf-data/poppler/unicodeMap/TIS-620": {
+      "bytes": 451,
+      "executable": false,
+      "sha256": "4c1d7fd7e1792dbc115b61c34b61954efa7bfe00dc5bc2b0f3f5c3624df7db36"
+    },
+    "pdf-data/poppler/unicodeMap/Windows-1255": {
+      "bytes": 638,
+      "executable": false,
+      "sha256": "41d788d5b7c7e8cee377f633dffec6514afcb82e84a377a48154a908d6afaf49"
+    },
+    "pdf-libs/libbz2.so.1": {
+      "bytes": 73160,
+      "executable": false,
+      "sha256": "a1e77c99cc558042331fa883c78b05d866e5457dad100f6f46d8a44275840ea9"
+    },
+    "pdf-libs/libexpat.so.1": {
+      "bytes": 264160,
+      "executable": false,
+      "sha256": "ceb240319176cb5c110f1af0a51908ce43a89d5f4ae1d177bf6bcac9604e71db"
+    },
+    "pdf-libs/libfontconfig.so.1": {
+      "bytes": 289792,
+      "executable": false,
+      "sha256": "dcb2ce6c99c9824e16bd01d899ee45ae2d68efc11fd0d5a4dd60eda87ee19374"
+    },
+    "pdf-libs/libfreetype.so.6": {
+      "bytes": 783088,
+      "executable": false,
+      "sha256": "2f3b32b6e12d7fd8b9591ab1c89a7fa7cff9d196de0caf3a15428512403d33ad"
+    },
+    "pdf-libs/libgcc_s.so.1": {
+      "bytes": 99680,
+      "executable": false,
+      "sha256": "79dadb30ab969aef68c31199e313547cc5bf21720c4dde2cc77e0cd0d1c6d1c8"
+    },
+    "pdf-libs/libjbig.so.2.1": {
+      "bytes": 52504,
+      "executable": false,
+      "sha256": "2504a0c3af003f9ef9a3f5f0d3d0b9e817787d763db395773f49f7ff2ad8d8c3"
+    },
+    "pdf-libs/libjpeg.so.62": {
+      "bytes": 433872,
+      "executable": false,
+      "sha256": "e87d26584b89e738a257555871c09bc195eb752bddacb109eb29fb8aa74fe7d9"
+    },
+    "pdf-libs/liblcms2.so.2": {
+      "bytes": 397440,
+      "executable": false,
+      "sha256": "2a3d7c529dbc986c528f62630a1621914f40dbf9353c143920419db577d25481"
+    },
+    "pdf-libs/libnspr4.so": {
+      "bytes": 266832,
+      "executable": false,
+      "sha256": "70579b35ad0b14e1f3d8e6c2a9ab9546a4a2d1bcbf5ded824065b7a5802a0a54"
+    },
+    "pdf-libs/libnss3.so": {
+      "bytes": 1348912,
+      "executable": false,
+      "sha256": "a5cfe6dd4a1cc013d819b86c2002176394f16843a091c2deb9ee62139a7b64bb"
+    },
+    "pdf-libs/libnssutil3.so": {
+      "bytes": 214288,
+      "executable": false,
+      "sha256": "ed184445b585f1e939c021347438ddfeeee810babe12c12905b9f86663764b06"
+    },
+    "pdf-libs/libopenjp2.so.7": {
+      "bytes": 367800,
+      "executable": false,
+      "sha256": "88dcb7ba39a59a14eb568eaee5e915cfc428e8584bf8c33bc40477a00a09ef8a"
+    },
+    "pdf-libs/libplc4.so": {
+      "bytes": 19952,
+      "executable": false,
+      "sha256": "45932b4d8fa7cbaf70716b5fc428cd284e15c82750bf7e66840486adf8e29055"
+    },
+    "pdf-libs/libplds4.so": {
+      "bytes": 15784,
+      "executable": false,
+      "sha256": "2393e1d9655732af9fd63fc55d2a45de176c27a7e0487e2219143bbb97858f33"
+    },
+    "pdf-libs/libpng16.so.16": {
+      "bytes": 221200,
+      "executable": false,
+      "sha256": "ebd1fa42daa29afd30ce54986cc28262efd2d0ce0a1372cd48634265be13a1af"
+    },
+    "pdf-libs/libpoppler.so.104": {
+      "bytes": 3867264,
+      "executable": false,
+      "sha256": "571e3986e01b956a895d6e641f72bbfa54e4a014a963ccd81fe831d1fbf3230a"
+    },
+    "pdf-libs/libsmime3.so": {
+      "bytes": 186616,
+      "executable": false,
+      "sha256": "6f480b7276ca140ec6d72105c96911f9c0bd736662d373fec1cacdaad7b8c6c9"
+    },
+    "pdf-libs/libstdc++.so.6": {
+      "bytes": 1660960,
+      "executable": false,
+      "sha256": "d94de1bf72691756040c221c29e7f6250543383446be754955d8008cc3d9e134"
+    },
+    "pdf-libs/libtiff.so.5": {
+      "bytes": 504872,
+      "executable": false,
+      "sha256": "76fbcf36ef3b562e801ea094463a57847d64de105e350b2839cbcf9ee32155a6"
+    },
+    "pdf-libs/libuuid.so.1": {
+      "bytes": 32392,
+      "executable": false,
+      "sha256": "402f08971a23ee3734064538feb6ae3de668b9407b4b4826e059184051e9f8b8"
+    },
+    "pdf-libs/libz.so.1": {
+      "bytes": 99640,
+      "executable": false,
+      "sha256": "282eaf2aa211f85ee404262b9aa36a1a9c299c3dce9839a0cdd61b44ac087d1d"
+    },
+    "pdf-licenses/README.txt": {
+      "bytes": 2615,
+      "executable": false,
+      "sha256": "337e299a93cd23a45950d9c665d3dcc54e98bec8765415257ff29337fdccc4c3"
+    },
+    "pdf-licenses/bzip2-libs/LICENSE": {
+      "bytes": 1901,
+      "executable": false,
+      "sha256": "4919cfb14a73cd64fcef67b107613970cf1659a09aa675dba31314f373bc7204"
+    },
+    "pdf-licenses/dejavu-fonts/LICENSE": {
+      "bytes": 4816,
+      "executable": false,
+      "sha256": "d75938dec098f06f0ac3c00853065d94f020be1c3c62ef1dc2975ba15b4d9b0e"
+    },
+    "pdf-licenses/expat/COPYING": {
+      "bytes": 1144,
+      "executable": false,
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534"
+    },
+    "pdf-licenses/fontconfig/COPYING": {
+      "bytes": 1313,
+      "executable": false,
+      "sha256": "fa4cd9ab005185e10cd8f7504518856c7dd36c01e766c2bac87f4fc638e9f886"
+    },
+    "pdf-licenses/freetype/FTL.TXT": {
+      "bytes": 6745,
+      "executable": false,
+      "sha256": "81a87c80bb6a62812d1b2e77164677b178150ed853fa9749bc6d772e2da4743f"
+    },
+    "pdf-licenses/freetype/GPLv2.TXT": {
+      "bytes": 17994,
+      "executable": false,
+      "sha256": "c4120c6752c910c299e3bd9cb3a46ff262c268303ca2069b61f92f10a5656c18"
+    },
+    "pdf-licenses/freetype/LICENSE.TXT": {
+      "bytes": 1743,
+      "executable": false,
+      "sha256": "fd056de4196903a676208ef58cfddafc7d583d1f28fa2e44c309cf84a59e62fb"
+    },
+    "pdf-licenses/jbigkit-libs/COPYING": {
+      "bytes": 17982,
+      "executable": false,
+      "sha256": "91df39d1816bfb17a4dda2d3d2c83b1f6f2d38d53e53e41e8f97ad5ac46a0cad"
+    },
+    "pdf-licenses/lcms2/COPYING": {
+      "bytes": 1078,
+      "executable": false,
+      "sha256": "c725daac91a9259ce5e195683c0eeb797d345035c36ac5ba114c9fa80e11639a"
+    },
+    "pdf-licenses/libgcc/COPYING": {
+      "bytes": 18002,
+      "executable": false,
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+    },
+    "pdf-licenses/libgcc/COPYING.LIB": {
+      "bytes": 26440,
+      "executable": false,
+      "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+    },
+    "pdf-licenses/libgcc/COPYING.RUNTIME": {
+      "bytes": 3324,
+      "executable": false,
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+    },
+    "pdf-licenses/libgcc/COPYING3": {
+      "bytes": 35147,
+      "executable": false,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    "pdf-licenses/libgcc/COPYING3.LIB": {
+      "bytes": 7639,
+      "executable": false,
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+    },
+    "pdf-licenses/libjpeg-turbo/LICENSE.md": {
+      "bytes": 5343,
+      "executable": false,
+      "sha256": "5c08657eda60b7946a913ee22ac73603335a468a6aa95204506a1586a8d677ee"
+    },
+    "pdf-licenses/libpng/LICENSE": {
+      "bytes": 4995,
+      "executable": false,
+      "sha256": "a247c24f82bacf0403fe2f3d5550493a91cdb575fe7036b764bda8cacf3efd9c"
+    },
+    "pdf-licenses/libuuid/COPYING": {
+      "bytes": 217,
+      "executable": false,
+      "sha256": "f051c5b2e7ed25acac4b79d22b9e5df80447c16f9ec543d6ed21c213c576f6aa"
+    },
+    "pdf-licenses/libuuid/COPYING.BSD-3": {
+      "bytes": 1391,
+      "executable": false,
+      "sha256": "9b718a9460fed5952466421235bc79eb49d4e9eacc920d7a9dd6285ab8fd6c6d"
+    },
+    "pdf-licenses/nspr/LICENSE": {
+      "bytes": 16726,
+      "executable": false,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    "pdf-licenses/nss-util/COPYING": {
+      "bytes": 18100,
+      "executable": false,
+      "sha256": "a20c1a32d1f8102432360b42e932869f7c11c7cdbacf9cac554c422132af47f4"
+    },
+    "pdf-licenses/nss/COPYING": {
+      "bytes": 18100,
+      "executable": false,
+      "sha256": "a20c1a32d1f8102432360b42e932869f7c11c7cdbacf9cac554c422132af47f4"
+    },
+    "pdf-licenses/openjpeg2/LICENSE": {
+      "bytes": 2112,
+      "executable": false,
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    "pdf-licenses/poppler-data/COPYING": {
+      "bytes": 1484,
+      "executable": false,
+      "sha256": "50f1319db19498535f3b506236f75092315460184538cc5d8183b87c3dee98a5"
+    },
+    "pdf-licenses/poppler-data/COPYING.adobe": {
+      "bytes": 1611,
+      "executable": false,
+      "sha256": "8e0c2c6a94177bd3203552802e01566385d15e76a142fb9fd04fc6b49ac48ca2"
+    },
+    "pdf-licenses/poppler-data/COPYING.gpl2": {
+      "bytes": 17987,
+      "executable": false,
+      "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    },
+    "pdf-licenses/poppler/COPYING": {
+      "bytes": 17987,
+      "executable": false,
+      "sha256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    },
+    "pdf-licenses/zlib/README": {
+      "bytes": 5187,
+      "executable": false,
+      "sha256": "7960b6b1cc63e619abb77acaea5427159605afee8c8b362664f4effc7d7f7d15"
+    },
+    "pdf-source/bzip2-1.0.6-28.el8_10.src.rpm": {
+      "bytes": 806071,
+      "executable": false,
+      "sha256": "bfa3eb8488c9852e9cf0be13accfa5f20d53de8d9905365070c6350e85e60b06"
+    },
+    "pdf-source/dejavu-fonts-2.35-7.el8.src.rpm": {
+      "bytes": 11478640,
+      "executable": false,
+      "sha256": "92a715032dc22895069da0deb2c98fc89068a040732762afe5dece5709e4da6c"
+    },
+    "pdf-source/expat-2.5.0-10.el8_10.src.rpm": {
+      "bytes": 8433710,
+      "executable": false,
+      "sha256": "922fb32ef51d3ce60e54d4fff9a0487d13007516fa76836fb0c2f8131478708c"
+    },
+    "pdf-source/fontconfig-2.13.1-4.el8.src.rpm": {
+      "bytes": 1769113,
+      "executable": false,
+      "sha256": "70c28823182c6931d898a1e6b3f188262ad2558d84e80638c563804a8a908637"
+    },
+    "pdf-source/freetype-2.9.1-10.el8_10.src.rpm": {
+      "bytes": 4343907,
+      "executable": false,
+      "sha256": "67c7734b0bd2c4a71afb10c8d53950f19ba9a26f641bad12a43939f4533c57c7"
+    },
+    "pdf-source/gcc-8.5.0-31.el8_10.alma.1.src.rpm": {
+      "bytes": 65726542,
+      "executable": false,
+      "sha256": "a348a042f0e712936fe2b58b206ba352c1a12960437fadb5861b990c7ea7f6e2"
+    },
+    "pdf-source/jbigkit-2.1-14.el8.src.rpm": {
+      "bytes": 456489,
+      "executable": false,
+      "sha256": "fb0e2e36e80631d1063a610fd52f6b4ea04ce0128ff4de258bd26091f3d38737"
+    },
+    "pdf-source/lcms2-2.9-2.el8.src.rpm": {
+      "bytes": 10977198,
+      "executable": false,
+      "sha256": "1a6d720c1abd23f7f337d85876c80768168f0463f7f2cf89ac23f14d9a0df6e6"
+    },
+    "pdf-source/libjpeg-turbo-1.5.3-14.el8_10.src.rpm": {
+      "bytes": 1684552,
+      "executable": false,
+      "sha256": "cdd6169e410aa6b9a0bee82c637ffcfcb8dd0d72699924ed514215169f2cbc55"
+    },
+    "pdf-source/libpng-1.6.34-11.el8_10.src.rpm": {
+      "bytes": 1042405,
+      "executable": false,
+      "sha256": "760fe7668979486a7c712f2886d0676089825f82b8640d68f419a5a7fe91a54d"
+    },
+    "pdf-source/libtiff-4.0.9-39.el8_10.src.rpm": {
+      "bytes": 2395078,
+      "executable": false,
+      "sha256": "e26dd5ae6f96bd76de3d5bfc06dbff743861bbe022c7e0772e43df1dc61eaea8"
+    },
+    "pdf-source/nspr-4.39.0-3.el8_10.src.rpm": {
+      "bytes": 1043091,
+      "executable": false,
+      "sha256": "f7334cf967a001fcaefcf8aaf48e41c1c1a82dcecb9275edae0dc9e4046172bc"
+    },
+    "pdf-source/nss-3.124.0-5.el8_10.src.rpm": {
+      "bytes": 82557478,
+      "executable": false,
+      "sha256": "ba8585562da77ba1cd01b8caac6be1ecbfe60b970ad0b412657f294355df4b36"
+    },
+    "pdf-source/openjpeg2-2.4.0-5.el8.src.rpm": {
+      "bytes": 2250094,
+      "executable": false,
+      "sha256": "81c0d4bd303e664fe767e83dd3566eb1854f9bd7d7b18476542bb01f69c7bf79"
+    },
+    "pdf-source/poppler-20.11.0-14.el8_10.src.rpm": {
+      "bytes": 4492586,
+      "executable": false,
+      "sha256": "bce9ac880317fc17a0c46002d07fa33b5c1fa7ef271ecae02b70a7ea633ce96a"
+    },
+    "pdf-source/poppler-data-0.4.9-2.el8.src.rpm": {
+      "bytes": 4131089,
+      "executable": false,
+      "sha256": "1bd5065ddc09dd34a0a76f4c76f31c1d0e21b1a1ed4cb3f39d0f538d6ecbb2cf"
+    },
+    "pdf-source/util-linux-2.32.1-50.el8_10.src.rpm": {
+      "bytes": 4837774,
+      "executable": false,
+      "sha256": "4eaed012a146ccd1b851fd1a8f9792c2e8e9a8d424c8d5174937a16b3411f73e"
+    },
+    "pdf-source/zlib-1.2.11-25.el8.src.rpm": {
+      "bytes": 564763,
+      "executable": false,
+      "sha256": "4f302dc61265c1d77da1a5cf96af4aee0481807374b24ac872590744eb13869c"
+    },
+    "pdfinfo": {
+      "bytes": 59224,
+      "executable": true,
+      "sha256": "eb9173829c851cd85dc97021f6cb0beaa63525f38aa73be09af1d0c86d5bafbc"
+    },
+    "pdftoppm": {
+      "bytes": 37984,
+      "executable": true,
+      "sha256": "fd9a68997f26fe27dc198f57eae19ef6e1865a3be170449b57a166f43540f546"
+    }
+  },
+  "packages": {
+    "bzip2-libs": {
+      "binary_rpm": "bzip2-libs-1.0.6-28.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "e59bd9d2773dcd2410166e3bcdb7376f0b2eff58e75109a73120e725ae0b5c75",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/bzip2-libs-1.0.6-28.el8_10.x86_64.rpm",
+      "license": "BSD",
+      "name": "bzip2-libs",
+      "source_rpm": "bzip2-1.0.6-28.el8_10.src.rpm",
+      "source_rpm_sha256": "bfa3eb8488c9852e9cf0be13accfa5f20d53de8d9905365070c6350e85e60b06",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/bzip2-1.0.6-28.el8_10.src.rpm",
+      "version": "1.0.6-28.el8_10"
+    },
+    "dejavu-sans-fonts": {
+      "binary_rpm": "dejavu-sans-fonts-2.35-7.el8.noarch.rpm",
+      "binary_rpm_sha256": "69bf57a9627b90076f9a471723d92cc02c08c7a4d5e02fedbdcec7d12d23ec82",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/dejavu-sans-fonts-2.35-7.el8.noarch.rpm",
+      "license": "Bitstream Vera and Public Domain",
+      "name": "dejavu-sans-fonts",
+      "source_rpm": "dejavu-fonts-2.35-7.el8.src.rpm",
+      "source_rpm_sha256": "92a715032dc22895069da0deb2c98fc89068a040732762afe5dece5709e4da6c",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/dejavu-fonts-2.35-7.el8.src.rpm",
+      "version": "2.35-7.el8"
+    },
+    "expat": {
+      "binary_rpm": "expat-2.5.0-10.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "afc3a7b24c11d11faea2bf6b300e752b616736e5bda57200c642f035d465db20",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/expat-2.5.0-10.el8_10.x86_64.rpm",
+      "license": "MIT",
+      "name": "expat",
+      "source_rpm": "expat-2.5.0-10.el8_10.src.rpm",
+      "source_rpm_sha256": "922fb32ef51d3ce60e54d4fff9a0487d13007516fa76836fb0c2f8131478708c",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/expat-2.5.0-10.el8_10.src.rpm",
+      "version": "2.5.0-10.el8_10"
+    },
+    "fontconfig": {
+      "binary_rpm": "fontconfig-2.13.1-4.el8.x86_64.rpm",
+      "binary_rpm_sha256": "556d3fa69391c90edaca675d97eeb6d6aad5b9f5c8284136a5eaf0f2f47df131",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/fontconfig-2.13.1-4.el8.x86_64.rpm",
+      "license": "MIT and Public Domain and UCD",
+      "name": "fontconfig",
+      "source_rpm": "fontconfig-2.13.1-4.el8.src.rpm",
+      "source_rpm_sha256": "70c28823182c6931d898a1e6b3f188262ad2558d84e80638c563804a8a908637",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/fontconfig-2.13.1-4.el8.src.rpm",
+      "version": "2.13.1-4.el8"
+    },
+    "freetype": {
+      "binary_rpm": "freetype-2.9.1-10.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "b4011bdf865f90688200e1683653849b4ff624f1fb17753b0d3e3754924df7c4",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/freetype-2.9.1-10.el8_10.x86_64.rpm",
+      "license": "(FTL or GPLv2+) and BSD and MIT and Public Domain and zlib with acknowledgement",
+      "name": "freetype",
+      "source_rpm": "freetype-2.9.1-10.el8_10.src.rpm",
+      "source_rpm_sha256": "67c7734b0bd2c4a71afb10c8d53950f19ba9a26f641bad12a43939f4533c57c7",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/freetype-2.9.1-10.el8_10.src.rpm",
+      "version": "2.9.1-10.el8_10"
+    },
+    "jbigkit-libs": {
+      "binary_rpm": "jbigkit-libs-2.1-14.el8.x86_64.rpm",
+      "binary_rpm_sha256": "1afc8948bcb6f2f4f91708badc2f9e0792ba2f3c22c2ab4fa00ea5c7d92a0c5c",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/jbigkit-libs-2.1-14.el8.x86_64.rpm",
+      "license": "GPLv2+",
+      "name": "jbigkit-libs",
+      "source_rpm": "jbigkit-2.1-14.el8.src.rpm",
+      "source_rpm_sha256": "fb0e2e36e80631d1063a610fd52f6b4ea04ce0128ff4de258bd26091f3d38737",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/jbigkit-2.1-14.el8.src.rpm",
+      "version": "2.1-14.el8"
+    },
+    "lcms2": {
+      "binary_rpm": "lcms2-2.9-2.el8.x86_64.rpm",
+      "binary_rpm_sha256": "aa3c4fd79a9b1a5c0235d5eb554232358f86cd9bf2ac0c4356ea0ff265770ad2",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/lcms2-2.9-2.el8.x86_64.rpm",
+      "license": "MIT",
+      "name": "lcms2",
+      "source_rpm": "lcms2-2.9-2.el8.src.rpm",
+      "source_rpm_sha256": "1a6d720c1abd23f7f337d85876c80768168f0463f7f2cf89ac23f14d9a0df6e6",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/lcms2-2.9-2.el8.src.rpm",
+      "version": "2.9-2.el8"
+    },
+    "libgcc": {
+      "binary_rpm": "libgcc-8.5.0-31.el8_10.alma.1.x86_64.rpm",
+      "binary_rpm_sha256": "e8b074a637599d81db4886f28899394588024e56b03c9c2f43b1e8c519d725c4",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libgcc-8.5.0-31.el8_10.alma.1.x86_64.rpm",
+      "license": "GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD",
+      "name": "libgcc",
+      "source_rpm": "gcc-8.5.0-31.el8_10.alma.1.src.rpm",
+      "source_rpm_sha256": "a348a042f0e712936fe2b58b206ba352c1a12960437fadb5861b990c7ea7f6e2",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/gcc-8.5.0-31.el8_10.alma.1.src.rpm",
+      "version": "8.5.0-31.el8_10.alma.1"
+    },
+    "libjpeg-turbo": {
+      "binary_rpm": "libjpeg-turbo-1.5.3-14.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "e96007853de744b028b0ae0b53d66ccb4db532ad3814fa6cfa3185a9cd079c5d",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/libjpeg-turbo-1.5.3-14.el8_10.x86_64.rpm",
+      "license": "IJG",
+      "name": "libjpeg-turbo",
+      "source_rpm": "libjpeg-turbo-1.5.3-14.el8_10.src.rpm",
+      "source_rpm_sha256": "cdd6169e410aa6b9a0bee82c637ffcfcb8dd0d72699924ed514215169f2cbc55",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/libjpeg-turbo-1.5.3-14.el8_10.src.rpm",
+      "version": "1.5.3-14.el8_10"
+    },
+    "libpng": {
+      "binary_rpm": "libpng-1.6.34-11.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "d281838c4a8f2f08a3770239acf4b0984616b6c75e9314a53bb9fe11c172dc24",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libpng-1.6.34-11.el8_10.x86_64.rpm",
+      "license": "zlib",
+      "name": "libpng",
+      "source_rpm": "libpng-1.6.34-11.el8_10.src.rpm",
+      "source_rpm_sha256": "760fe7668979486a7c712f2886d0676089825f82b8640d68f419a5a7fe91a54d",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libpng-1.6.34-11.el8_10.src.rpm",
+      "version": "1.6.34-11.el8_10"
+    },
+    "libstdc++": {
+      "binary_rpm": "libstdc++-8.5.0-31.el8_10.alma.1.x86_64.rpm",
+      "binary_rpm_sha256": "b41f7a2ee398970b73c3da8accf7973646b658a3ebdd0cc5f9a51e03a5f4a900",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libstdc++-8.5.0-31.el8_10.alma.1.x86_64.rpm",
+      "license": "GPLv3+ and GPLv3+ with exceptions and GPLv2+ with exceptions and LGPLv2+ and BSD",
+      "name": "libstdc++",
+      "source_rpm": "gcc-8.5.0-31.el8_10.alma.1.src.rpm",
+      "source_rpm_sha256": "a348a042f0e712936fe2b58b206ba352c1a12960437fadb5861b990c7ea7f6e2",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/gcc-8.5.0-31.el8_10.alma.1.src.rpm",
+      "version": "8.5.0-31.el8_10.alma.1"
+    },
+    "libtiff": {
+      "binary_rpm": "libtiff-4.0.9-39.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "eebbf9951012baf74d67290e98ccfc422f6ea341dac26c107313d32d4aafcfd6",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/libtiff-4.0.9-39.el8_10.x86_64.rpm",
+      "license": "libtiff",
+      "name": "libtiff",
+      "source_rpm": "libtiff-4.0.9-39.el8_10.src.rpm",
+      "source_rpm_sha256": "e26dd5ae6f96bd76de3d5bfc06dbff743861bbe022c7e0772e43df1dc61eaea8",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/libtiff-4.0.9-39.el8_10.src.rpm",
+      "version": "4.0.9-39.el8_10"
+    },
+    "libuuid": {
+      "binary_rpm": "libuuid-2.32.1-50.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "5d0bd08b2d808e7ed17ec8a66934c25a576fc66f84cf7b6d5a5b69e4d6bdeecc",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libuuid-2.32.1-50.el8_10.x86_64.rpm",
+      "license": "BSD",
+      "name": "libuuid",
+      "source_rpm": "util-linux-2.32.1-50.el8_10.src.rpm",
+      "source_rpm_sha256": "4eaed012a146ccd1b851fd1a8f9792c2e8e9a8d424c8d5174937a16b3411f73e",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/util-linux-2.32.1-50.el8_10.src.rpm",
+      "version": "2.32.1-50.el8_10"
+    },
+    "nspr": {
+      "binary_rpm": "nspr-4.39.0-3.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "c4f736b395e1bbdf53fe9d13c4e553f250b2b970748625da465a195344bcf4f3",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/nspr-4.39.0-3.el8_10.x86_64.rpm",
+      "license": "MPLv2.0",
+      "name": "nspr",
+      "source_rpm": "nspr-4.39.0-3.el8_10.src.rpm",
+      "source_rpm_sha256": "f7334cf967a001fcaefcf8aaf48e41c1c1a82dcecb9275edae0dc9e4046172bc",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/nspr-4.39.0-3.el8_10.src.rpm",
+      "version": "4.39.0-3.el8_10"
+    },
+    "nss": {
+      "binary_rpm": "nss-3.124.0-5.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "07e2fad1cd8ae421728f847b15749b821cb8bfe15a03ae07b623ee91f4c3baa9",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/nss-3.124.0-5.el8_10.x86_64.rpm",
+      "license": "MPLv2.0",
+      "name": "nss",
+      "source_rpm": "nss-3.124.0-5.el8_10.src.rpm",
+      "source_rpm_sha256": "ba8585562da77ba1cd01b8caac6be1ecbfe60b970ad0b412657f294355df4b36",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/nss-3.124.0-5.el8_10.src.rpm",
+      "version": "3.124.0-5.el8_10"
+    },
+    "nss-util": {
+      "binary_rpm": "nss-util-3.124.0-5.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "54f62682e09f925f8765a85f6730131231224fe88a1b308fb874ceee8f7a9f13",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/nss-util-3.124.0-5.el8_10.x86_64.rpm",
+      "license": "MPLv2.0",
+      "name": "nss-util",
+      "source_rpm": "nss-3.124.0-5.el8_10.src.rpm",
+      "source_rpm_sha256": "ba8585562da77ba1cd01b8caac6be1ecbfe60b970ad0b412657f294355df4b36",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/nss-3.124.0-5.el8_10.src.rpm",
+      "version": "3.124.0-5.el8_10"
+    },
+    "openjpeg2": {
+      "binary_rpm": "openjpeg2-2.4.0-5.el8.x86_64.rpm",
+      "binary_rpm_sha256": "87a77a9c0d317710befb60d1df9e49970278d3dfc4aba050f1a84ee9d15b5ce1",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/openjpeg2-2.4.0-5.el8.x86_64.rpm",
+      "license": "BSD and MIT",
+      "name": "openjpeg2",
+      "source_rpm": "openjpeg2-2.4.0-5.el8.src.rpm",
+      "source_rpm_sha256": "81c0d4bd303e664fe767e83dd3566eb1854f9bd7d7b18476542bb01f69c7bf79",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/openjpeg2-2.4.0-5.el8.src.rpm",
+      "version": "2.4.0-5.el8"
+    },
+    "poppler": {
+      "binary_rpm": "poppler-20.11.0-14.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "585aa5b9ab3d686faa39ea0f07ea5a7ffec3bc3a3af11969cce3ed13f97ea203",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/poppler-20.11.0-14.el8_10.x86_64.rpm",
+      "license": "(GPLv2 or GPLv3) and GPLv2+ and LGPLv2+ and MIT",
+      "name": "poppler",
+      "source_rpm": "poppler-20.11.0-14.el8_10.src.rpm",
+      "source_rpm_sha256": "bce9ac880317fc17a0c46002d07fa33b5c1fa7ef271ecae02b70a7ea633ce96a",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/poppler-20.11.0-14.el8_10.src.rpm",
+      "version": "20.11.0-14.el8_10"
+    },
+    "poppler-data": {
+      "binary_rpm": "poppler-data-0.4.9-2.el8.noarch.rpm",
+      "binary_rpm_sha256": "340e08b3b8134d1fe87e273afdd9fb6907075f69d6044834fdfbf6fc9ea1ab43",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/poppler-data-0.4.9-2.el8.noarch.rpm",
+      "license": "BSD and GPLv2",
+      "name": "poppler-data",
+      "source_rpm": "poppler-data-0.4.9-2.el8.src.rpm",
+      "source_rpm_sha256": "1bd5065ddc09dd34a0a76f4c76f31c1d0e21b1a1ed4cb3f39d0f538d6ecbb2cf",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/poppler-data-0.4.9-2.el8.src.rpm",
+      "version": "0.4.9-2.el8"
+    },
+    "poppler-utils": {
+      "binary_rpm": "poppler-utils-20.11.0-14.el8_10.x86_64.rpm",
+      "binary_rpm_sha256": "c7f9d7b187a6822489f43920b681b9b97c3c18540e1a70920bf14260832aabbf",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/poppler-utils-20.11.0-14.el8_10.x86_64.rpm",
+      "license": "(GPLv2 or GPLv3) and GPLv2+ and LGPLv2+ and MIT",
+      "name": "poppler-utils",
+      "source_rpm": "poppler-20.11.0-14.el8_10.src.rpm",
+      "source_rpm_sha256": "bce9ac880317fc17a0c46002d07fa33b5c1fa7ef271ecae02b70a7ea633ce96a",
+      "source_url": "https://vault.almalinux.org/8.10/AppStream/Source/Packages/poppler-20.11.0-14.el8_10.src.rpm",
+      "version": "20.11.0-14.el8_10"
+    },
+    "zlib": {
+      "binary_rpm": "zlib-1.2.11-25.el8.x86_64.rpm",
+      "binary_rpm_sha256": "ab40e85f180a6d38ce0291408b7ef5c422250f53cb26c44399ef1a4e8622778e",
+      "binary_url": "https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/zlib-1.2.11-25.el8.x86_64.rpm",
+      "license": "zlib and Boost",
+      "name": "zlib",
+      "source_rpm": "zlib-1.2.11-25.el8.src.rpm",
+      "source_rpm_sha256": "4f302dc61265c1d77da1a5cf96af4aee0481807374b24ac872590744eb13869c",
+      "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/zlib-1.2.11-25.el8.src.rpm",
+      "version": "1.2.11-25.el8"
+    }
+  },
+  "renderer_version": "20.11.0-14.el8_10",
+  "schema": 1,
+  "signatures": {
+    "keyring_image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8",
+    "verification_log_sha256": "be46057e8e7951bbdd6c91184a31cebf510b612af66297ab7841a3cbdac233cb",
+    "verified": true
+  },
+  "system_glibc_sonames": [
+    "libc.so.6",
+    "libm.so.6",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libutil.so.1",
+    "ld-linux-x86-64.so.2"
+  ]
+}

@@ -113,6 +113,7 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
     "usr/lib/narwhal3d/licenses/CPython-PSF-License.txt",
     "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
+    "usr/lib/narwhal3d/licenses/PDF-Poppler-NOTICE.txt",
 }
 REQUIRED_PATHS = {
     *REQUIRED_NOTICE_PATHS,
@@ -867,6 +868,16 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
     verify_lock_and_markers(appdir, identity)
     verify_executables_and_imports(appdir)
     verify_exact_save_helper(appdir, manifest.get("exact_save_helper"))
+    # Rust owns PDF dependency/source/license admission; this is package transport.
+    from source_tools import _rpc, AuditError
+    try:
+        pdf_record = _rpc('pdf_bundle', action='verify',
+                          directory=str(appdir / APP_ROOT_RELATIVE / NATIVE_COMPONENT_RELATIVE),
+                          lock=str(appdir / APP_ROOT_RELATIVE / 'packaging/linux-pdf.lock.json'))
+    except AuditError as error:
+        raise VerificationError(str(error)) from error
+    if manifest.get('pdf_renderer') != pdf_record:
+        raise VerificationError('PDF renderer source/ELF/license record differs')
 
 
 def verify_exact_save_helper(appdir: Path, record: object) -> None:
@@ -1088,6 +1099,7 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
     "usr/lib/narwhal3d/licenses/CPython-PSF-License.txt",
         "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
+    "usr/lib/narwhal3d/licenses/PDF-Poppler-NOTICE.txt",
     }
     if REQUIRED_NOTICE_PATHS != expected_notices or not expected_notices.issubset(REQUIRED_PATHS):
         raise VerificationError("self-check found an incomplete required notice set")

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / 'scripts/source_tools.sh'
@@ -56,8 +57,18 @@ def _rpc(op, _process_timeout=300, **arguments):
     request = {'op': op, 'root': str(ROOT), **arguments}
     if op != 'config':
         request['config'] = {k: globals()[k] for k in _CONFIG}
-    result = subprocess.run([str(LAUNCHER), 'rpc'], input=json.dumps(_encode(request)).encode(),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=_process_timeout)
+    command = [str(LAUNCHER), 'rpc']
+    if sys.platform == 'win32':
+        # Windows cannot execute the POSIX launcher. Cargo performs source-bound
+        # native builds; this adapter still owns no probe/audit implementation.
+        command = [str(Path.home() / '.cargo/bin/rustup.exe'), 'run', '1.95.0',
+                   'cargo', 'run', '--manifest-path', str(ROOT / 'native/source_tools/Cargo.toml'),
+                   '--target-dir', str(ROOT / 'native/source_tools/target/transport-host'),
+                   '--bin', 'narwhal-source-tools', '--release', '--locked', '--offline',
+                   '--target', 'x86_64-pc-windows-msvc',
+                   '-j', '2', '--', 'rpc']
+    result = subprocess.run(command, input=json.dumps(_encode(request)).encode(),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=_process_timeout, cwd=ROOT)
     if result.returncode:
         raise AuditError(result.stderr.decode('utf-8', 'replace').strip())
     reply = json.loads(result.stdout)

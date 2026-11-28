@@ -15,7 +15,7 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$NarwhalRevision,
     [ValidatePattern('^0\.4\.[0-9]+$')]
-    [string]$Version = "0.4.14",
+    [string]$Version = "0.4.15",
     [string]$Workspace = "C:\Narwhal3D-build",
     [ValidateRange(1, 8)][int]$Jobs = 4,
     [switch]$ResumePackaging,
@@ -291,8 +291,33 @@ $RuntimeMarker = Join-Path $BuildDirectory "bin\.narwhal3d-native-runtime.json"
 $NativeInputNames = @(
     "apply_narwhal3d_branding.py", "apply_app_drawn.py", "apply_cad_boundary_wires.py",
     "apply_deferred_first_present.py", "apply_statusbar_height.py",
-    "narwhal3d_app_icon.svg", "narwhal3d_window_icons.json", "apply_window_overlay.py"
+    "narwhal3d_app_icon.svg", "narwhal3d_window_icons.json", "apply_window_overlay.py",
+    "apply_preclose.rs"
 )
+
+function Invoke-PreclosePatch([switch]$Check) {
+    # Git/legacy Python writes CRLF on Windows; the Rust patch matches canonical
+    # LF anchors. Normalize only during application, never check-only admission.
+    if (-not $Check) {
+        foreach ($Relative in @('windowmanager\intern\wm_window.cc', 'makesrna\intern\rna_wm.cc')) {
+            $SourceFile = Join-Path (Join-Path $BlenderSource 'source\blender') $Relative
+            $OriginalText = [IO.File]::ReadAllText($SourceFile)
+            $CanonicalText = $OriginalText.Replace("`r`n", "`n")
+            if ($OriginalText -ne $CanonicalText) {
+                [IO.File]::WriteAllText($SourceFile, $CanonicalText, (New-Object Text.UTF8Encoding($false)))
+            }
+        }
+    }
+    $RustupCommand = Get-Command rustup.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $PinnedRustup = if ($RustupCommand) { $RustupCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustup.exe' }
+    if (-not (Test-Path -LiteralPath $PinnedRustup -PathType Leaf)) { throw 'rustup.exe is required for the native preclose patch' }
+    $PrecloseTool = Join-Path $Workspace 'apply_narwhal_preclose.exe'
+    Run-Native $PinnedRustup @('run', '1.95.0', 'rustc', '--edition', '2024',
+        (Join-Path $PatchDirectory 'apply_preclose.rs'), '-o', $PrecloseTool) 'compile source-bound preclose patch tool'
+    $PrecloseArguments = @((Join-Path $BlenderSource 'source\blender'))
+    if ($Check) { $PrecloseArguments += '--check' }
+    Run-Native $PrecloseTool $PrecloseArguments 'apply or verify current native preclose source'
+}
 if ($RebuildRuntime) {
     # Fail before resetting either clone or touching the retained build tree.
     foreach ($Required in @((Join-Path $BuildDirectory 'CMakeCache.txt'),
@@ -481,6 +506,7 @@ for name in ("apply_statusbar_height.py", "apply_window_overlay.py"):
 # Invalidate successful-build provenance BEFORE patching, including failed rebuilds.
 Remove-Item -LiteralPath $RuntimeMarker -Force -ErrorAction SilentlyContinue
 Run-Native $Python @('-B', $PatchDriver, $BlenderSource, $PatchDirectory) "apply Narwhal native patches"
+Invoke-PreclosePatch
 
 if (-not $RebuildRuntime -and (Test-Path -LiteralPath $BuildDirectory)) {
     Log "Removing prior build output while retaining downloaded Blender libraries"
@@ -578,7 +604,8 @@ from pathlib import Path
 import sys
 
 NATIVE_MARKERS = (b'NARWHAL3D_DEFER_FIRST_PRESENT', b'NARWHAL3D_STATUSBAR_HEIGHT',
-                  b'RNA_WINDOW_DRAW_HANDLE', b'narwhal_app_drawn', b'narwhal_boundary_wires')
+                  b'RNA_WINDOW_DRAW_HANDLE', b'narwhal_app_drawn', b'narwhal_boundary_wires',
+                  b'narwhal_defer_close', b'narwhal_close_requested')
 
 def regular(path):
     if not path.is_file() or any(p.is_symlink() or getattr(p, 'is_junction', lambda: False)()
@@ -654,6 +681,16 @@ require(callable(getattr(bpy.types.STATUSBAR_HT_header, 'draw', None)), 'missing
 for owner, region in ((bpy.types.SpaceView3D, 'HEADER'), (bpy.types.SpaceInfo, 'WINDOW')):
     handle = owner.draw_handler_add(lambda: None, (), region, 'POST_PIXEL')
     owner.draw_handler_remove(handle, region)
+manager = bpy.context.window_manager
+for name in ('narwhal_defer_close', 'narwhal_close_requested'):
+    require(name in bpy.types.WindowManager.bl_rna.properties, 'missing native preclose RNA: ' + name)
+    original = getattr(manager, name)
+    require(isinstance(original, bool), 'invalid native preclose RNA type: ' + name)
+    try:
+        setattr(manager, name, not original)
+        require(getattr(manager, name) is (not original), 'native preclose RNA is not writable: ' + name)
+    finally:
+        setattr(manager, name, original)
 window = bpy.types.Window
 require(callable(getattr(window, 'draw_handler_add', None)) and
         callable(getattr(window, 'draw_handler_remove', None)), 'missing Window overlay API')
@@ -670,6 +707,7 @@ print(json.dumps({'native_ui_api': 'ok', 'ui_scale': scale, 'background': bpy.ap
                   'statusbar_logical_pixels': 37}))
 '@ | Set-Content -LiteralPath $RuntimeApiProbe -Encoding UTF8
 $NativeRuntimeDirectory = Join-Path $BuildDirectory 'bin'
+Invoke-PreclosePatch -Check
 $ProvenanceArguments = @('-B', $ProvenanceDriver, 'check', $BlenderSource, $PatchDirectory,
                         $NativeRuntimeDirectory, $BlenderRevision) + $NativeInputNames
 if ($ResumePackaging) {
@@ -771,6 +809,13 @@ if errorlevel 1 exit /b 1
 exit /b %errorlevel%
 "@ | Set-Content -LiteralPath $CargoWrapper -Encoding ASCII
 # Only the in-app ABI is portable to Windows; the external MCP server uses Unix FDs.
+# Build the Rust host driver before Python packaging adapters request ABI probes.
+# Their Windows transport is offline/source-bound, never a POSIX shell or Python engine.
+$SourceToolsManifest = Join-Path $NarwhalSource "native\source_tools\Cargo.toml"
+$SourceToolsTarget = Join-Path $NarwhalSource "native\source_tools\target\transport-host"
+Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--jobs", "$Jobs",
+    "--manifest-path", $SourceToolsManifest, "--target", "x86_64-pc-windows-msvc",
+    "--target-dir", $SourceToolsTarget) "build source-bound Rust packaging driver" $NarwhalSource
 $AutomationManifest = Join-Path $NarwhalSource "native\automation_core\Cargo.toml"
 Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--lib", "--manifest-path", $AutomationManifest, "--target", "x86_64-pc-windows-msvc") "build in-app automation ABI with pinned Rust MSVC" $NarwhalSource
 $ApplicationInputsPath = Join-Path $Workspace "application-core-inputs.json"

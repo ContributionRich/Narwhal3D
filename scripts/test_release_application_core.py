@@ -31,6 +31,7 @@ import assemble_macos_release as mac
 import assemble_windows_release as windows_assemble
 import verify_windows_release as windows
 from check_pure_core import PURE_CORE_RETIREMENT_IDENTITY
+from source_tools import AuditError
 
 ROOT = Path(__file__).resolve().parents[1]
 SO = "libnarwhal_application_core.so"
@@ -591,10 +592,19 @@ class ApplicationPackaging(unittest.TestCase):
             (exact / linux.EXACT_SAVE_HELPER).write_bytes(b"helper")
             (exact / linux.EXACT_SAVE_LICENSE).write_bytes(b"opennurbs license")
             record = {"sha256": linux.sha256_file(exact / linux.EXACT_SAVE_HELPER)}
+            # Rust separately qualifies PDF policy; this copy fixture supplies its RPC boundary.
+            pdf_directory = root / "pdf-renderer"
+            pdf_record = {"schema": 1, "renderer": "Poppler"}
+            pdf_stage = Mock(return_value=pdf_record)
             namespace = dict(vars(linux), licenses=licenses, source_root=source,
                              app_root=app, runtime_dir=runtime, native_components_dir=native,
-                             exact_save_dir=exact, exact_save_record=record)
+                             exact_save_dir=exact, exact_save_record=record,
+                             args=types.SimpleNamespace(pdf_renderer_dir=pdf_directory),
+                             pdf_record=pdf_record, _rpc=pdf_stage, AuditError=AuditError)
             exec(code, namespace)
+            pdf_stage.assert_called_once_with(
+                "pdf_bundle", root=str(source), action="stage", directory=str(pdf_directory.resolve()),
+                destination=str(app / linux.NATIVE_COMPONENT_RELATIVE))
             self.assertEqual((app / linux.EXACT_SAVE_RELATIVE).read_bytes(), b"helper")
             self.assertEqual((app / "licenses" / linux.EXACT_SAVE_LICENSE).read_bytes(), b"opennurbs license")
             self.assertEqual((app / linux.NATIVE_COMPONENT_RELATIVE / SO).read_bytes(), SO.encode())

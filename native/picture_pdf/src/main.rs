@@ -155,6 +155,69 @@ fn limits() -> Result<(), String> {
 fn limits() -> Result<(), String> {
     Err("PDF Pictures currently require Linux Poppler and the native converter supervisor".into())
 }
+#[derive(Debug)]
+struct Renderer {
+    info: PathBuf,
+    raster: PathBuf,
+    bundled: Option<PathBuf>,
+}
+impl Renderer {
+    // Resolve only from the kernel's executable identity, never CWD, argv[0], or an
+    // environment search path. A partial/missing bundle must not use host Poppler.
+    fn installed() -> Result<Self, String> {
+        let exe =
+            std::env::current_exe().map_err(|e| format!("PDF helper identity unavailable: {e}"))?;
+        Self::bundled_at(&exe)
+    }
+    fn bundled_at(exe: &Path) -> Result<Self, String> {
+        let bin = exe.parent().ok_or("PDF helper has no runtime directory")?;
+        let info = bin.join("pdfinfo");
+        let raster = bin.join("pdftoppm");
+        for (path, directory) in [
+            (bin.to_path_buf(), true),
+            (info.clone(), false),
+            (raster.clone(), false),
+            (bin.join("pdf-libs"), true),
+            (bin.join("pdf-data"), true),
+            (bin.join("pdf-data/fonts.conf"), false),
+        ] {
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|_| format!("bundled PDF renderer missing: {}; developer use requires --developer-system-poppler", path.display()))?;
+            if metadata.file_type().is_symlink()
+                || metadata.is_dir() != directory
+                || (!directory && !metadata.is_file())
+            {
+                return Err(format!(
+                    "bundled PDF renderer must be regular: {}",
+                    path.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let owner = fs::metadata(exe).map_err(|e| e.to_string())?.uid();
+                if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
+                    return Err(format!(
+                        "untrusted bundled PDF renderer permissions: {}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            info,
+            raster,
+            bundled: Some(bin.to_path_buf()),
+        })
+    }
+    fn developer_system() -> Self {
+        Self {
+            info: "/usr/bin/pdfinfo".into(),
+            raster: "/usr/bin/pdftoppm".into(),
+            bundled: None,
+        }
+    }
+}
 struct Stage(PathBuf);
 impl Drop for Stage {
     fn drop(&mut self) {
@@ -162,24 +225,31 @@ impl Drop for Stage {
     }
 }
 fn tool(
-    program: &str,
+    program: &Path,
+    renderer: &Renderer,
     args: &[&std::ffi::OsStr],
     cwd: &Path,
     name: &str,
 ) -> Result<String, String> {
     let stdout = cwd.join(format!("{name}.stdout"));
     let stderr = cwd.join(format!("{name}.stderr"));
-    let status = Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .env("PATH", "/usr/bin:/bin")
+    let mut command = Command::new(program);
+    command.args(args).env_clear().env("LC_ALL", "C");
+    if let Some(bin) = &renderer.bundled {
+        command
+            .env("LD_LIBRARY_PATH", bin.join("pdf-libs"))
+            .env("FONTCONFIG_FILE", bin.join("pdf-data/fonts.conf"))
+            .env("FONTCONFIG_PATH", bin.join("pdf-data"))
+            .env("XDG_CACHE_HOME", cwd)
+            .env("POPPLER_DATADIR", bin.join("pdf-data/poppler"));
+    }
+    let status = command
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(fs::File::create(&stdout).map_err(|e| e.to_string())?)
         .stderr(fs::File::create(&stderr).map_err(|e| e.to_string())?)
         .status()
-        .map_err(|e| format!("{program} unavailable: {e}"))?;
+        .map_err(|e| format!("{} unavailable: {e}", program.display()))?;
     if !status.success() {
         return Err(format!(
             "PDF {name} refused the file (status {status}); corrupt/encrypted or resource limit"
@@ -194,7 +264,7 @@ fn tool(
     }
     String::from_utf8(bytes).map_err(|_| "invalid PDF metadata encoding".into())
 }
-fn render(input: &Path, cache: &Path) -> Result<serde_json::Value, String> {
+fn render(input: &Path, cache: &Path, renderer: &Renderer) -> Result<serde_json::Value, String> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(target_os = "linux")]
@@ -245,7 +315,8 @@ fn render(input: &Path, cache: &Path) -> Result<serde_json::Value, String> {
     let source = stage.0.join("source.pdf");
     fs::write(&source, bytes).map_err(|e| e.to_string())?;
     let text = tool(
-        "/usr/bin/pdfinfo",
+        &renderer.info,
+        renderer,
         &[
             "-f".as_ref(),
             "1".as_ref(),
@@ -261,7 +332,8 @@ fn render(input: &Path, cache: &Path) -> Result<serde_json::Value, String> {
     let dpi = dpi.to_string();
     let prefix = stage.0.join("page-1");
     tool(
-        "/usr/bin/pdftoppm",
+        &renderer.raster,
+        renderer,
         &[
             "-f".as_ref(),
             "1".as_ref(),
@@ -300,11 +372,22 @@ fn render(input: &Path, cache: &Path) -> Result<serde_json::Value, String> {
 fn main() {
     let result = (|| {
         limits()?;
-        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+        let renderer = if args
+            .first()
+            .is_some_and(|arg| arg == "--developer-system-poppler")
+        {
+            args.remove(0);
+            Renderer::developer_system()
+        } else {
+            Renderer::installed()?
+        };
         if args.len() != 2 {
-            return Err("usage: narwhal-picture-pdf INPUT CACHE".into());
+            return Err(
+                "usage: narwhal-picture-pdf [--developer-system-poppler] INPUT CACHE".into(),
+            );
         }
-        render(Path::new(&args[0]), Path::new(&args[1]))
+        render(Path::new(&args[0]), Path::new(&args[1]), &renderer)
     })();
     match result {
         Ok(value) => println!("{value}"),
@@ -318,6 +401,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Existing actual-host fixtures explicitly opt into developer system Poppler.
+    fn render(input: &Path, cache: &Path) -> Result<serde_json::Value, String> {
+        super::render(input, cache, &Renderer::developer_system())
+    }
     fn temp(label: &str) -> Stage {
         let p = std::env::temp_dir().join(format!(
             "narwhal-pdf-{label}-{}-{}",
@@ -381,6 +468,99 @@ mod tests {
     }
     fn packet(page: &str) -> String {
         format!("Pages: 2\nEncrypted: no\nPage 1 size: {page} pts\nPage 1 rot: 0\n")
+    }
+    fn bundle_fixture() -> (Stage, PathBuf) {
+        let stage = temp("bundle-routing");
+        let exe = stage.0.join("narwhal-picture-pdf");
+        for name in ["narwhal-picture-pdf", "pdfinfo", "pdftoppm"] {
+            fs::write(stage.0.join(name), b"fixture").unwrap();
+        }
+        fs::create_dir(stage.0.join("pdf-libs")).unwrap();
+        fs::create_dir(stage.0.join("pdf-data")).unwrap();
+        fs::write(stage.0.join("pdf-data/fonts.conf"), b"fixture").unwrap();
+        (stage, exe)
+    }
+    #[test]
+    fn bundled_route_is_executable_relative_not_cwd_or_path() {
+        let (stage, exe) = bundle_fixture();
+        let renderer = Renderer::bundled_at(&exe).unwrap();
+        assert_eq!(renderer.info, stage.0.join("pdfinfo"));
+        assert_eq!(renderer.raster, stage.0.join("pdftoppm"));
+        assert_eq!(renderer.bundled, Some(stage.0.clone()));
+        let developer = Renderer::developer_system();
+        assert_eq!(developer.info, Path::new("/usr/bin/pdfinfo"));
+        assert_eq!(developer.raster, Path::new("/usr/bin/pdftoppm"));
+        assert_eq!(developer.bundled, None);
+    }
+    #[test]
+    fn incomplete_bundle_never_falls_back_to_installed_system_poppler() {
+        for name in ["pdfinfo", "pdftoppm", "pdf-libs", "pdf-data/fonts.conf"] {
+            let (stage, exe) = bundle_fixture();
+            let path = stage.0.join(name);
+            if path.is_dir() {
+                fs::remove_dir(&path).unwrap();
+            } else {
+                fs::remove_file(&path).unwrap();
+            }
+            assert!(
+                Renderer::bundled_at(&exe)
+                    .unwrap_err()
+                    .contains("bundled PDF renderer missing"),
+                "{name}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn linked_or_writable_bundle_is_refused() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        for name in ["pdfinfo", "pdftoppm", "pdf-libs", "pdf-data/fonts.conf"] {
+            let (stage, exe) = bundle_fixture();
+            let path = stage.0.join(name);
+            let target = stage.0.join("replaced");
+            fs::rename(&path, &target).unwrap();
+            symlink(&target, &path).unwrap();
+            assert!(Renderer::bundled_at(&exe).is_err(), "linked {name}");
+        }
+        for name in ["pdfinfo", "pdftoppm", "pdf-libs", "pdf-data"] {
+            let (stage, exe) = bundle_fixture();
+            fs::set_permissions(stage.0.join(name), fs::Permissions::from_mode(0o777)).unwrap();
+            assert!(
+                Renderer::bundled_at(&exe)
+                    .unwrap_err()
+                    .contains("untrusted"),
+                "writable {name}"
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn renderer_environment_is_fixed_and_does_not_pass_search_paths() {
+        let (stage, exe) = bundle_fixture();
+        let renderer = Renderer::bundled_at(&exe).unwrap();
+        let environment = tool(
+            Path::new("/usr/bin/env"),
+            &renderer,
+            &[],
+            &stage.0,
+            "environment",
+        )
+        .unwrap();
+        let fields: std::collections::BTreeMap<_, _> = environment
+            .lines()
+            .map(|line| line.split_once('=').unwrap())
+            .collect();
+        assert_eq!(fields.len(), 6);
+        assert!(!fields.contains_key("PATH"));
+        assert!(!fields.contains_key("LD_PRELOAD"));
+        assert_eq!(
+            fields["LD_LIBRARY_PATH"],
+            stage.0.join("pdf-libs").to_str().unwrap()
+        );
+        assert_eq!(
+            fields["FONTCONFIG_FILE"],
+            stage.0.join("pdf-data/fonts.conf").to_str().unwrap()
+        );
     }
     #[test]
     fn refuses_metadata_limits_and_encryption() {

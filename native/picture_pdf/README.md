@@ -1,7 +1,7 @@
 # PDF reference Pictures (Linux)
 
-This helper rasterizes PDF page **1 only** through installed Poppler `pdfinfo` and
-`pdftoppm`; it is not PDF vector/geometry import. Picture announces page1/total and
+This helper rasterizes PDF page **1 only** through source-pinned sibling Poppler
+`pdfinfo` and `pdftoppm` in the Linux application payload; it is not PDF vector/geometry import. Picture announces page1/total and
 how many pages were omitted. PNG/JPEG behavior is unchanged. PDF JavaScript, URL
 navigation and embedded actions are not executed by these raster/metadata tools.
 
@@ -34,3 +34,11 @@ installed Poppler/MuPDF. `NARWHAL_PDF_FIXTURE_OUT` optionally retains those gene
 fixtures for Blender integration tests. `scripts/build_linux_native.py --crate
 picture_pdf` builds the helper in the existing portable offline build container.
 No manufacturing surfaces or curves are approximated by this image-only feature.
+
+## Packaged and developer routing
+
+Default invocation requires the trusted executable-relative bundle: sibling `pdfinfo`, `pdftoppm`, `pdf-libs/`, and `pdf-data/fonts.conf`. No PATH/CWD/environment-selected executable is admitted, and an incomplete bundle never falls back to the host. Renderer environments are cleared and populated only with fixed bundle paths. The Linux helper links with `$ORIGIN/pdf-libs` RUNPATH for its own unwind dependency after supervisor environment clearing.
+
+Developers may explicitly invoke `narwhal-picture-pdf --developer-system-poppler INPUT CACHE`; actual-host unit fixtures select this mode directly. Application calls never silently opt in. The containment/resource/page/cache/geometry policies are unchanged.
+
+See `packaging/NOTICES.md`, `packaging/linux-pdf.lock.json`, and `licenses/PDF-Poppler-NOTICE.txt` for redistribution source/license evidence and final-package qualification commands. The Rust examples exercise real isolated Poppler, inherited renderer containment, a failing host-route control and unchanged restored output; they require explicit owned package/fixture/artifact paths and do not claim final AppImage acceptance for a staged directory.

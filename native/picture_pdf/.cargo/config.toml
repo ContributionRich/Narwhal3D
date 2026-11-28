@@ -1,0 +1,4 @@
+# The supervisor clears worker environments. Resolve the helper's own unwind
+# library from its trusted sibling bundle before any Rust code can run.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/pdf-libs"]

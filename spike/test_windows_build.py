@@ -25,6 +25,7 @@ NAMES = (
     'apply_narwhal3d_branding.py', 'apply_app_drawn.py', 'apply_cad_boundary_wires.py',
     'apply_deferred_first_present.py', 'apply_statusbar_height.py',
     'narwhal3d_app_icon.svg', 'narwhal3d_window_icons.json', 'apply_window_overlay.py',
+    'apply_preclose.rs',
 )
 
 
@@ -68,7 +69,7 @@ def run_checks(check):
     linux = (ROOT / 'scripts/build_blender_linux.sh').read_text()
     names = re.search(r'\$NativeInputNames = @\((.*?)\n\)', script, re.S)[1]
     check(tuple(re.findall(r'"([^"]+)"', names)) == NAMES,
-          'Windows native provenance uses exactly the eight current inputs')
+          'Windows native provenance uses exactly the nine current inputs')
     for name in NAMES:
         check('blender_patches/' + name in linux, 'native input also attested by Linux: ' + name)
     for token in (
@@ -180,7 +181,7 @@ def run_checks(check):
             (patches / name).write_text(prelude + body)
         execute(codes['PatchDriver'], (source, patches))
         expected = [['branding', str(source), str(patches / NAMES[5])]] + [
-            [name, str(source / 'source/blender')] for name in (NAMES[1], NAMES[2], NAMES[3], NAMES[4], NAMES[-1])]
+            [name, str(source / 'source/blender')] for name in (NAMES[1], NAMES[2], NAMES[3], NAMES[4], 'apply_window_overlay.py')]
         check([json.loads(line) for line in calls.read_text().splitlines()] == expected,
               'driver applies all six patches in order with correct checkout/source-blender roots')
         # Run the original missing-deferred-patch bug against the same assertion.
@@ -200,7 +201,7 @@ def run_checks(check):
                 module = load(real)
                 for relative, _old, new in module.EDITS:
                     contents[relative].append(new)
-                if name == NAMES[-1]:
+                if name == 'apply_window_overlay.py':
                     contents[module.HEADER].append(module.HEADER_TEXT)
         for relative, chunks in contents.items():
             path = source / 'source/blender' / relative
@@ -276,9 +277,13 @@ def run_checks(check):
         Collection=SimpleNamespace(bl_rna=SimpleNamespace(properties={'narwhal_app_drawn'})),
         Mesh=SimpleNamespace(bl_rna=SimpleNamespace(properties={'narwhal_boundary_wires'})),
         STATUSBAR_HT_header=SimpleNamespace(draw=lambda: None),
-        SpaceView3D=space, SpaceInfo=space, Window=window)
+        SpaceView3D=space, SpaceInfo=space, Window=window,
+        WindowManager=SimpleNamespace(bl_rna=SimpleNamespace(properties={
+            'narwhal_defer_close', 'narwhal_close_requested'})))
     bpy = SimpleNamespace(types=types, app=SimpleNamespace(background=False),
-                          context=SimpleNamespace(preferences=SimpleNamespace(system=system)))
+                          context=SimpleNamespace(preferences=SimpleNamespace(system=system),
+                          window_manager=SimpleNamespace(narwhal_defer_close=False,
+                                                        narwhal_close_requested=False)))
     execute(codes['RuntimeApiProbe'], modules={'bpy': bpy})
     check([call[2:] for call in handles] == [('HEADER', 'POST_PIXEL'), ('WINDOW', 'POST_PIXEL'), ('POST_PIXEL',)],
           'UI probe exercises header, Info and Window callback signatures')
@@ -314,11 +319,13 @@ def run_checks(check):
     system.ui_scale = 1.25
     bpy.app.background = False
 
-    for mutation in ('window', 'scale', 'header'):
+    for mutation in ('window', 'scale', 'header', 'preclose'):
         if mutation == 'window':
             window.draw_handler_add = None
         elif mutation == 'scale':
             system.ui_scale = float('nan')
+        elif mutation == 'preclose':
+            types.WindowManager.bl_rna.properties.remove('narwhal_close_requested')
         else:
             types.STATUSBAR_HT_header.draw = None
         try:
@@ -330,6 +337,7 @@ def run_checks(check):
         window.draw_handler_add = add
         system.ui_scale = 1.25
         types.STATUSBAR_HT_header.draw = lambda: None
+        types.WindowManager.bl_rna.properties.add('narwhal_close_requested')
 
     process = SimpleNamespace(pid=123, wait=lambda **kwargs: 0)
     with patch.object(subprocess, 'Popen', return_value=process) as spawn:

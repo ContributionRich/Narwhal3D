@@ -91,7 +91,7 @@ LAUNCH_FILES = (
     "narwhal3d-project.xml",
     "narwhal3d.png",
 )
-PACKAGING_FILES = ("linux-x86_64.lock.json", "README.md", "NOTICES.md")
+PACKAGING_FILES = ("linux-x86_64.lock.json", "linux-pdf.lock.json", "README.md", "NOTICES.md")
 REQUIRED_LICENSE_FILES = (
     "GPL-3.0-or-later.txt",
     "rhino3dm-MIT.txt",
@@ -108,6 +108,7 @@ REQUIRED_LICENSE_FILES = (
     "VectorCraft-NOTICE.txt",
     "Library-Rust-Dependencies.txt",
     "CPython-PSF-License.txt",
+    "PDF-Poppler-NOTICE.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -820,6 +821,13 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
     validate_appimagetool(appimagetool, artifacts)
     validate_appimage_runtime(appimage_runtime, artifacts)
+    # Rust owns PDF source/license/hash/ELF admission; Python is build transport only.
+    from source_tools import _rpc, AuditError
+    try:
+        pdf_record = _rpc('pdf_bundle', root=str(source_root), action='verify',
+                          directory=str(args.pdf_renderer_dir.resolve()))
+    except AuditError as error:
+        raise ReleaseError(str(error)) from error
     native_records = validate_native_components(
         native_components_dir, document_core_artifacts, runtime_dir / OCCT_LIB_RELATIVE)
     exact_save_record = validate_exact_save_helper(exact_save_dir)
@@ -914,6 +922,14 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         for filename in NATIVE_COMPONENTS:
             copy_file(native_components_dir / filename, native_target / filename,
                       f"native component {filename}")
+        try:
+            staged_pdf_record = _rpc('pdf_bundle', root=str(source_root), action='stage',
+                                     directory=str(args.pdf_renderer_dir.resolve()),
+                                     destination=str(native_target))
+        except AuditError as error:
+            raise ReleaseError(str(error)) from error
+        if staged_pdf_record != pdf_record:
+            raise ReleaseError('PDF renderer changed during assembly')
         packaged_native = app_root / "narwhal3d" / "native"
         packaged_native.mkdir(parents=True, exist_ok=True)
         for filename in PACKAGED_ACCELERATORS:
@@ -956,6 +972,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             },
             "native_components": native_records,
             "exact_save_helper": exact_save_record,
+            "pdf_renderer": pdf_record,
             "excluded_components": EXCLUDED_COMPONENTS,
             "inventory": inventory(appdir),
         }
@@ -1070,6 +1087,7 @@ def self_check() -> None:
         "VectorCraft-NOTICE.txt",
     "Library-Rust-Dependencies.txt",
     "CPython-PSF-License.txt",
+    "PDF-Poppler-NOTICE.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")
@@ -1172,6 +1190,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-dir", type=Path, help="verified native Narwhal runtime")
     parser.add_argument("--native-components-dir", type=Path,
                         help="verified native component directory")
+    parser.add_argument("--pdf-renderer-dir", type=Path,
+                        help="source-pinned Poppler bundle including libraries, licenses and source RPMs")
     parser.add_argument("--document-core-artifacts", type=Path,
                         help="source-bound Linux/Windows document-core artifact directory")
     parser.add_argument("--exact-save-helper-dir", type=Path,
@@ -1198,6 +1218,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("--runtime-dir", args.runtime_dir),
                 ("--native-components-dir", args.native_components_dir),
                 ("--document-core-artifacts", args.document_core_artifacts),
+                ("--pdf-renderer-dir", args.pdf_renderer_dir),
                 ("--exact-save-helper-dir", args.exact_save_helper_dir),
                 ("--appimagetool", args.appimagetool),
                 ("--appimage-runtime", args.appimage_runtime),

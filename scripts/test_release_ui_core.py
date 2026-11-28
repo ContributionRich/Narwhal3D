@@ -21,7 +21,7 @@ import textwrap
 import tomllib
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import build_linux_native as common
 import build_macos_native as mac_build
@@ -30,6 +30,7 @@ import verify_linux_release as linux_verify
 import assemble_macos_release as mac
 import assemble_windows_release as windows_assemble
 import verify_windows_release as windows
+from source_tools import AuditError
 
 ROOT = Path(__file__).resolve().parents[1]
 SO, DYLIB, DLL = "libnarwhal_ui_core.so", "libnarwhal_ui_core.dylib", "narwhal_ui_core.dll"
@@ -496,10 +497,19 @@ class UiPackaging(unittest.TestCase):
             # The exact-save helper is copied in the same block from its own input.
             exact = root / "exact-save"
             put(exact / linux.EXACT_SAVE_HELPER, b"helper")
+            # The shared copy block also calls the separately qualified Rust PDF stage.
+            pdf_directory = root / "pdf-renderer"
+            pdf_record = {"schema": 1, "renderer": "Poppler"}
+            pdf_stage = Mock(return_value=pdf_record)
             exec(code, dict(vars(linux), app_root=app, native_components_dir=source,
                             source_root=root / 'legacy-source', native_records={},
                             exact_save_dir=exact,
-                            exact_save_record={"sha256": common.digest(exact / linux.EXACT_SAVE_HELPER)}))
+                            exact_save_record={"sha256": common.digest(exact / linux.EXACT_SAVE_HELPER)},
+                            args=types.SimpleNamespace(pdf_renderer_dir=pdf_directory),
+                            pdf_record=pdf_record, _rpc=pdf_stage, AuditError=AuditError))
+            pdf_stage.assert_called_once_with(
+                "pdf_bundle", root=str(root / "legacy-source"), action="stage",
+                directory=str(pdf_directory.resolve()), destination=str(app / linux.NATIVE_COMPONENT_RELATIVE))
             self.assertEqual((app / linux.EXACT_SAVE_RELATIVE).read_bytes(), b"helper")
             for slot in (linux.NATIVE_COMPONENT_RELATIVE, Path("narwhal3d/native")):
                 self.assertEqual((app / slot / SO).read_bytes(), SO.encode())

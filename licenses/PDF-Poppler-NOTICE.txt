@@ -1,0 +1,39 @@
+Linux PDF reference Pictures — bundled Poppler and dependencies
+
+The Linux AppImage includes AlmaLinux8.10 x86_64 Poppler20.11.0-14.el8_10
+utilities and their separately scoped native libraries, Poppler character maps,
+and DejaVu Sans. PDF page1 is rasterized as a reference image, not CAD geometry.
+Windows PDF Pictures remain unsupported/unqualified.
+
+Poppler is distributed under GPLv2 or GPLv3; Narwhal3D elects GPLv3 for
+this distribution. JBIG-KIT is GPLv2-or-later. Other dependency license choices
+and notices are recorded in packaging/linux-pdf.lock.json and the packaged
+runtime/linux-x86_64/bin/pdf-licenses/ directory. Freetype is used under its
+FreeType License. Portions of this software are copyright 2018 The FreeType
+Project (www.freetype.org). All rights reserved. DejaVu fonts carry the
+Bitstream Vera notice and public-domain additions; the font is unmodified.
+
+CORRESPONDING SOURCE IS INCLUDED, not merely promised by an upstream URL.
+Inside the extracted AppImage, usr/lib/narwhal3d/runtime/linux-x86_64/bin/
+pdf-source/ contains the exact distribution source RPMs, including upstream
+sources, distribution patches and RPM spec/build recipes, for every bundled
+package (shared source RPMs occur once). No private SDK or owner data is included.
+The same directory's pdf-licenses/ carries the accompanying license notices.
+The complete GPLv3 text is in usr/lib/narwhal3d/licenses/GPL-3.0-or-later.txt.
+
+Source RPMs can be unpacked with rpm2cpio FILE.src.rpm | cpio -idmv, or rebuilt
+with rpmbuild --rebuild FILE.src.rpm in an AlmaLinux8 build environment with the
+BuildRequires listed by the enclosed spec installed. These are unmodified distro
+binaries, not a claim of bit-reproducible rebuilding. The lock records versions,
+binary/source package SHA256 digests, pinned HTTPS retrieval locations and the
+exact shipped-file hashes. The binary and source RPM signatures were checked
+against the AlmaLinux keys in the pinned manylinux build image before staging.
+The distro vault URLs are additional retrieval locations, not a substitute for
+our included corresponding source. Source code remains available when offline.
+
+Only the normal host glibc/ELF loader family is external. The enforced GLIBC
+ceiling is unchanged at2.35; each new bundled ELF must pass that ceiling. This
+bundle does not certify every Linux distribution, font, PDF or physical GPU.
+The PDF helper clears renderer environment variables, selects its own sibling
+binaries and library/data directories, and inherits the bounded native supervisor
+limits and socket-denial policy. It does not search PATH or launch PDF actions.

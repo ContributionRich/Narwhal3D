@@ -1347,7 +1347,19 @@
       "native/source_tools/src/pure_gate.rs",
       "native/source_tools/src/pure_gate_config.json",
       "native/source_tools/tests/pure_gate.rs",
-      "native/source_tools/tests/pure_mutations.rs"
+      "native/source_tools/tests/pure_mutations.rs",
+      "licenses/PDF-Poppler-NOTICE.txt",
+      "native/picture_pdf/.cargo/config.toml",
+      "native/picture_pdf/examples/containment_probe.rs",
+      "native/picture_pdf/examples/qualify_package.rs",
+      "native/source_tools/examples/qualify_pdf_bundle.rs",
+      "native/source_tools/src/pdf_bundle.rs",
+      "native/source_tools/tests/launcher_cache.rs",
+      "native/source_tools/tests/release_pdf_closure.rs",
+      "native/source_tools/tests/windows_preclose_release.rs",
+      "native/source_tools/tests/windows_transport.rs",
+      "packaging/linux-pdf.lock.json",
+      "packaging/pdf-fonts.conf"
     ]
   },
   "FORBIDDEN_EXACT": {
